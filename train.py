@@ -26,6 +26,7 @@ def parse_args(args):
                         action='store_true', default=False)
     parser.add_argument('--lr', help='learning rate', type=float, default=1e-4)
     parser.add_argument('--batch_size', help='Batch size.', type=int, default=16)
+    parser.add_argument('--valid_batch_size', help='Validation batch size.', type=int, default=32)
     parser.add_argument('--epochs', help='Number of epochs to train.', type=int, default=100)
     parser.add_argument('--allow_growth', help='allow gpu memory growth.',
                         action='store_true', default=False)
@@ -97,16 +98,17 @@ def main(args=None):
                              version_set_pairs=args.valid_pair,
                              augmentation_unit=get_agumentator(train=False,
                                                                img_size=model.effdet_args.input_size,),
-                             batch_size=args.batch_size,
+                             batch_size=args.valid_batch_size,
                              drop_remainder=False,
                              )
     valid_step = len(voc_valid)
     valid_ds = voc_valid.get_dataset()
 
     lr = CosineLRDecay(init_lr=args.lr, total_batch=step_per_epoch*(args.epochs-1))
-    lr = LRWarmup(scheduler=lr, step=step_per_epoch, init_lr=args.lr/10)
+    lr = LRWarmup(scheduler=lr, step=step_per_epoch, init_lr=0.)
 
-    optimizer = keras.optimizers.Adam(learning_rate=lr)
+    # optimizer = keras.optimizers.Adam(learning_rate=lr)
+    optimizer = keras.optimizers.SGD(learning_rate=lr, momentum=.9)
 
     loss_train = keras.metrics.Mean(name='loss_train')
     loss_valid = keras.metrics.Mean(name='loss_valid')
