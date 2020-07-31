@@ -111,7 +111,7 @@ if __name__ == '__main__':
     os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
     inputs = [
-        np.random.normal(size=(4, n, n, 64)) for n in [4, 8, 16, 32, 64]
+        np.random.normal(size=(4, n, n, 64)) for n in [64, 32, 16, 8, 4]
     ]
 
     boxnet = BoxNet()
