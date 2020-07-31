@@ -41,8 +41,9 @@ def effdet_loss(box_preds, cls_preds, box_annos, cls_annos, anchor, classes=20, 
         box_target_dxy = (box_anno[..., :2] - anchor[..., :2]) / anchor[..., 2:]
         box_target_dwh = tf.math.log(box_anno[..., 2:] / anchor[..., 2:])
         box_target = tf.concat([box_target_dxy, box_target_dwh], axis=-1)
+        box_target_normalize = tf.divide(box_target, tf.constant([[.1, .1, .2, .2]]))
 
-        x = box_target - box_pred
+        x = box_target_normalize - box_pred
         x_abs = tf.abs(x)
         s_l1_loss = tf.where(x_abs > (1. / sigma_sq),
                              x_abs - (.5 / sigma_sq),
