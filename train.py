@@ -11,6 +11,7 @@ from data.augmenation import get_agumentator
 from lr import CosineLRDecay, LRWarmup
 from anchors.anchors import generate_anchor
 from losses import effdet_loss
+from config import get_config
 
 
 def parse_args(args):
@@ -77,16 +78,18 @@ def main(args=None):
             print(e)
 
     print('freeze backbone / bn : {} / {}'.format(args.freeze_backbone, args.freeze_bn))
-    model = EfficientDet(D='D0',
-                         freeze_backbone=args.freeze_backbone,
-                         freeze_bn=args.freeze_bn)
-    model.build((model.effdet_args.input_size, model.effdet_args.input_size, 3))
+    config = get_config()
+    model = EfficientDet(config)
+    # model = EfficientDet(D='D0',
+    #                      freeze_backbone=args.freeze_backbone,
+    #                      freeze_bn=args.freeze_bn)
+    model.build((None, config.input_size, config.input_size, 3))
     model.summary()
 
     voc_train = VOCGenerator(data_dir=args.voc_path,
                              version_set_pairs=args.train_pair,
                              augmentation_unit=get_agumentator(train=True,
-                                                               img_size=model.effdet_args.input_size,
+                                                               img_size=config.input_size,
                                                                min_visibility=.3),
                              batch_size=args.batch_size,
                              drop_remainder=True,
@@ -97,7 +100,7 @@ def main(args=None):
     voc_valid = VOCGenerator(data_dir=args.voc_path,
                              version_set_pairs=args.valid_pair,
                              augmentation_unit=get_agumentator(train=False,
-                                                               img_size=model.effdet_args.input_size,),
+                                                               img_size=config.input_size,),
                              batch_size=args.valid_batch_size,
                              drop_remainder=False,
                              )
@@ -118,7 +121,7 @@ def main(args=None):
 
     min_loss = None
 
-    anchor = tf.cast(generate_anchor(img_size=model.effdet_args.input_size), tf.float32)
+    anchor = tf.cast(generate_anchor(img_size=config.input_size), tf.float32)
     for epoch in range(args.epochs):
         for step, data in enumerate(train_ds):
             train(*data)

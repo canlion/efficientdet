@@ -1,121 +1,99 @@
+from functools import partial
+
 import tensorflow as tf
 import tensorflow.keras as keras
 
-from .layers import ConvBlock
-
-
-initializer = keras.initializers.VarianceScaling(scale=2., mode='fan_out', distribution='untruncated_normal')
-
 
 class BoxNet(keras.layers.Layer):
-    def __init__(self, depth=3, width=64, activation=keras.activations.relu, num_anchor=9, name=None):
+    def __init__(self, config, name=None):
         super(BoxNet, self).__init__(name=name)
-        self.depth = depth
-        self.width = width
-        self.activation = activation
-        self.num_anchor = num_anchor
+        self.repeat = config.box_repeat
+        self.width = config.box_width
+        self.act_fn = config.act_fn
+        self.num_anchor = len(config.size_scale) * len(config.ratio)
 
-    def build(self, shape_list):
-        num_feautre = len(shape_list)
+    def build(self, input_shape):
+        conv = partial(keras.layers.SeparableConv2D,
+                       kernel_size=3, strides=1, padding='same',
+                       depthwise_initializer=keras.initializers.VarianceScaling(),
+                       pointwise_initializer=keras.initializers.VarianceScaling())
 
-        conv_cfg = {
-            'depthwise_initializer': initializer,
-            'pointwise_initializer': initializer,
-            'depthwise_regularizer': keras.regularizers.l2(1e-4),
-            'pointwise_regularizer': keras.regularizers.l2(1e-4),
-        }
-        self.conv_list = [
-            ConvBlock(self.width, conv_type='separable', conv_cfg=conv_cfg, apply_bn=False) for _ in range(self.depth)
-        ]
-        self.head = ConvBlock(self.num_anchor * 4, conv_type='separable', conv_cfg=conv_cfg, apply_bn=False)
+        self.convs = [conv(filters=self.width, name='Box_Conv_{}'.format(i)) for i in range(self.repeat)]
+        self.bns = [keras.layers.BatchNormalization(name='Box_BN_{}'.format(i)) for i in range(self.repeat)]
+        self.acts = [keras.layers.Activation(self.act_fn, name='Box_Act_{}'.format(i)) for i in range(self.repeat)]
 
-        bn_cfg = {
-            'momentum': .997,
-            'epsilon': 1e-4
-        }
-        self.bn_list = [
-            [keras.layers.BatchNormalization(**bn_cfg) for _ in range(self.depth)] for _ in range(num_feautre)
-        ]
-        super(BoxNet, self).build(shape_list)
+        self.box_head = conv(filters=self.num_anchor*4)
+
+        super(BoxNet, self).build(input_shape)
 
     def call(self, inputs, **kwargs):
-        # N = inputs[0].get_shape().as_list()[0]
-        N = tf.shape(inputs[0])[0]
-        output_list = list()
-        for i, feature in enumerate(inputs):
-            output = feature
-            for j in range(self.depth):
-                output = self.conv_list[j](output, **kwargs)
-                output = self.bn_list[i][j](output, **kwargs)
-                output = self.activation(output)
-            reg = self.head(output, **kwargs)
-            output_list.append(reg)
-        reshape_list = list(map(lambda x: keras.backend.reshape(x, (N, -1, 4)), output_list))
-        output = keras.backend.concatenate(reshape_list, axis=1)
-        return output
+        batch_size = tf.shape(inputs[0])[0]
+        box_list = list()
+        for feature in inputs:
+            for conv, bn, act in zip(self.convs, self.bns, self.acts):
+                feature = act(bn(conv(feature), **kwargs))
+            box = self.box_head(feature)
+            box_list.append(box)
+
+        box_reshape_list = list(map(lambda x: keras.backend.reshape(x, (batch_size, -1, 4)), box_list))
+        box_concat = keras.backend.concatenate(box_reshape_list, axis=1)
+        return box_concat
 
 
 class ClsNet(keras.layers.Layer):
-    def __init__(self, depth=3, width=64, activation=keras.activations.relu, num_cls=20, num_anchor=9, name=None):
+    def __init__(self, config, name=None):
         super(ClsNet, self).__init__(name=name)
-        self.depth = depth
-        self.width = width
-        self.activation = activation
-        self.num_cls = num_cls
-        self.num_anchor = num_anchor
+        self.repeat = config.class_repeat
+        self.width = config.class_width
+        self.act_fn = config.act_fn
+        self.num_classes = config.num_classes
+        self.num_anchor = len(config.size_scale) * len(config.ratio)
 
-    def build(self, shape_list):
-        num_feautre = len(shape_list)
+    def build(self, input_shape):
+        conv = partial(keras.layers.SeparableConv2D,
+                       kernel_size=3, strides=1, padding='same',
+                       depthwise_initializer=keras.initializers.VarianceScaling(),
+                       pointwise_initializer=keras.initializers.VarianceScaling())
 
-        conv_cfg = {
-            'depthwise_initializer': initializer,
-            'pointwise_initializer': initializer,
-            'depthwise_regularizer': keras.regularizers.l2(1e-4),
-            'pointwise_regularizer': keras.regularizers.l2(1e-4),
-        }
-        self.conv_list = [
-            ConvBlock(self.width, conv_type='separable', conv_cfg=conv_cfg, apply_bn=False) for _ in range(self.depth)
-        ]
-        self.head = ConvBlock(self.num_cls * self.num_anchor, conv_type='separable', conv_cfg=conv_cfg, apply_bn=False)
+        self.convs = [conv(filters=self.width, name='Cls_Conv_{}'.format(i)) for i in range(self.repeat)]
+        self.bns = [keras.layers.BatchNormalization(name='Cls_BN_{}'.format(i)) for i in range(self.repeat)]
+        self.acts = [keras.layers.Activation(self.act_fn, name='Cls_Act_{}'.format(i)) for i in range(self.repeat)]
 
-        bn_cfg = {
-            'momentum': .997,
-            'epsilon': 1e-4
-        }
-        self.bn_list = [
-            [keras.layers.BatchNormalization(**bn_cfg) for _ in range(self.depth)] for _ in range(num_feautre)
-        ]
-        super(ClsNet, self).build(shape_list)
+        self.cls_head = conv(filters=self.num_anchor * self.num_classes)
+
+        super(ClsNet, self).build(input_shape)
 
     def call(self, inputs, **kwargs):
-        # N = inputs[0].get_shape().as_list()[0]
-        N = tf.shape(inputs[0])[0]
-        output_list = list()
-        for i, feature in enumerate(inputs):
-            output = feature
-            for j in range(self.depth):
-                output = self.conv_list[j](output, **kwargs)
-                output = self.bn_list[i][j](output, **kwargs)
-                output = self.activation(output)
-            cls = self.head(output, **kwargs)
-            output_list.append(cls)
-        reshape_list = list(map(lambda x: keras.backend.reshape(x, (N, -1, self.num_cls)), output_list))
-        output = keras.backend.concatenate(reshape_list, axis=1)
-        return keras.activations.sigmoid(output)
+        batch_size = tf.shape(inputs[0])[0]
+        cls_list = list()
+        for feature in inputs:
+            for conv, bn, act in zip(self.convs, self.bns, self.acts):
+                feature = act(bn(conv(feature), **kwargs))
+            cls = self.cls_head(feature)
+            cls_list.append(cls)
+
+        cls_reshape_list = list(map(lambda x: keras.backend.reshape(x, (batch_size, -1, self.num_classes)), cls_list))
+        cls_concat = keras.backend.concatenate(cls_reshape_list, axis=1)
+        return keras.backend.sigmoid(cls_concat)
 
 
 if __name__ == '__main__':
     import os
+    import sys
     import numpy as np
 
+    sys.path.append('..')
+    from config import get_config
     os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+
+    config = get_config()
 
     inputs = [
         np.random.normal(size=(4, n, n, 64)) for n in [64, 32, 16, 8, 4]
     ]
 
-    boxnet = BoxNet()
-    clsnet = ClsNet()
+    boxnet = BoxNet(config)
+    clsnet = ClsNet(config)
     result_box = boxnet(inputs, training=False)
     result_cls = clsnet(inputs, training=False)
     print(result_box.shape, result_cls.shape)

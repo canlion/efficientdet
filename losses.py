@@ -33,23 +33,33 @@ def IOU(box, anchor):
 
 
 def effdet_loss(box_preds, cls_preds, box_annos, cls_annos, anchor, classes=20, alpha=.25, gamma=2.):
-    def smooth_l1_loss(box_pred, box_anno, anchor, sigma=3.):
-        sigma_sq = sigma ** 2
+    def smooth_l1_loss(box_pred, box_anno, anchor, delta=.1):
+        # sigma_sq = sigma ** 2
         box_anno = ltrb2xywh(box_anno)
         anchor = ltrb2xywh(anchor)
 
         box_target_dxy = (box_anno[..., :2] - anchor[..., :2]) / anchor[..., 2:]
         box_target_dwh = tf.math.log(box_anno[..., 2:] / anchor[..., 2:])
         box_target = tf.concat([box_target_dxy, box_target_dwh], axis=-1)
-        box_target_normalize = tf.divide(box_target, tf.constant([[.1, .1, .2, .2]]))
 
-        x = box_target_normalize - box_pred
+        x = box_target - box_pred
         x_abs = tf.abs(x)
-        s_l1_loss = tf.where(x_abs > (1. / sigma_sq),
-                             x_abs - (.5 / sigma_sq),
-                             tf.pow(x_abs, 2) * sigma_sq * .5)
+        huber_loss = tf.where(x_abs <= delta,
+                              0.5 * tf.pow(x_abs, 2),
+                              0.5 * tf.pow(delta, 2) + delta * (x_abs - delta))
 
-        return tf.reduce_sum(s_l1_loss)
+        return keras.backend.sum(huber_loss)
+
+        # box_target_normalize = tf.divide(box_target, tf.constant([[.1, .1, .2, .2]]))
+
+        # x = box_target_normalize - box_pred
+        # x_abs = tf.abs(x)
+        # s_l1_loss = tf.where(x_abs > (1. / sigma_sq),
+        #                      x_abs - (.5 / sigma_sq),
+        #                      tf.pow(x_abs, 2) * sigma_sq * .5)
+        #
+        #
+        # return tf.reduce_sum(s_l1_loss)
 
     def focal_loss(cls_target, cls_pred):
         alpha_factor = alpha * tf.ones_like(cls_pred)
@@ -96,7 +106,9 @@ def effdet_loss(box_preds, cls_preds, box_annos, cls_annos, anchor, classes=20, 
             cls_loss += focal_loss(pos_cls_target, pos_cls_pred)
         cls_loss += focal_loss(tf.zeros_like(neg_cls_pred), neg_cls_pred)
 
-        loss = (box_loss + cls_loss) / tf.maximum(1., num_pos_box)
+        box_loss = 50. * box_loss / tf.maximum(1., 4 * num_pos_box)
+        cls_loss = cls_loss / tf.maximum(1., num_pos_box)
+        loss = box_loss + cls_loss
         loss_sum += loss
 
     return loss_sum / tf.cast(N, tf.float32)

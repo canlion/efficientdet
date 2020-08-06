@@ -161,7 +161,7 @@ class EfficientNetBase:
     def __init__(self,
                  B,
                  depth_divisor=8,
-                 depth_drop_rate=.2,
+                 drop_rate=.2,
                  freeze_bn=False,
                  name='efficientnet'):
 
@@ -173,7 +173,7 @@ class EfficientNetBase:
         self.round_repeat = partial(round_repeat, depth_coefficient=net_args.depth_coefficient)
         self.name = name
 
-        self.depth_drop_rate = depth_drop_rate
+        self.depth_drop_rate = drop_rate
         self.freeze_bn = freeze_bn
         self.activation = keras.activations.swish
 

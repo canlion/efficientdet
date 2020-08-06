@@ -2,30 +2,7 @@ import tensorflow as tf
 import tensorflow.keras as keras
 
 
-class FastFusion(keras.layers.Layer):
-    def __init__(self, epsilon=1e-4, name=None):
-        super(FastFusion, self).__init__(name=name)
-        self._epsilon = epsilon
 
-    def build(self, feature_list):
-        num_features = len(feature_list)
-        self.feature_w = self.add_weight(
-            name=self.name+'_feature_w',
-            shape=(1, 1, 1, 1, num_features),
-            initializer=keras.initializers.constant(1/num_features),
-            trainable=True,
-            dtype=self.dtype
-        )
-        super(FastFusion, self).build(feature_list)
-
-    def call(self, inputs, **kwargs):
-        w_nonzero = keras.activations.relu(self.feature_w)
-        w_normalize = w_nonzero / (tf.reduce_sum(w_nonzero) + self._epsilon)
-        feature_stack = tf.stack(inputs, axis=-1)
-        feature_weighted = tf.multiply(feature_stack, w_normalize)
-        feature_fusion = tf.reduce_sum(feature_weighted, axis=-1)
-
-        return feature_fusion
 
 
 class ConvBlock(keras.layers.Layer):

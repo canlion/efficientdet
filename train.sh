@@ -2,10 +2,11 @@
 
 python train.py \
   --voc_path /mnt/hdd/jinwoo/sandbox_datasets/voc_download/ \
-  --train_pair '[[2007, "train"], [2007, "val"], [2012, "val"], ["2007Test", "test"]]' \
+  --train_pair '[[2007, "train"], [2007, "val"], [2012, "train"], ["2007Test", "test"]]' \
   --valid_pair '[[2012, "val"]]' \
-  --freeze_backbone \
-  --lr 4e-3 \
-  --batch_size 16 \
-  --epochs 60 \
+  --lr 1e-3 \
+  --batch_size 4 \
+  --valid_batch_size 32 \
+  --epochs 300 \
   --allow_growth
+
