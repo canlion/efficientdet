@@ -106,7 +106,7 @@ class EffdetLoss(tf.keras.losses.Loss):
             cls_loss = 0.
             num_box_pos = tf.cast(tf.shape(box_true_pos)[0], tf.float32)
             if tf.greater(num_box_pos, 0):
-                box_loss += self.huber_loss(box_pred_pos, box_true_pos, self.anchor)
+                box_loss += self.huber_loss(box_pred_pos, box_true_pos, anchor_pos)
                 cls_loss += self.focal_loss(cls_pred_pos, cls_true_pos)
             cls_loss += self.focal_loss(cls_pred_neg, tf.zeros_like(cls_pred_neg))
 
