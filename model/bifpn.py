@@ -1,7 +1,5 @@
 from math import ceil
 from itertools import count
-from functools import partial
-
 
 import tensorflow as tf
 import tensorflow.keras as keras
@@ -9,6 +7,12 @@ import tensorflow.keras as keras
 
 class ResampleOp(keras.layers.Layer):
     def __init__(self, H_target, W_target, C_target, **kwargs):
+        """
+        Adjust the size of the feature. If the depth is different with target channel, adjust it by convolution.
+        :param H_target: int : target height
+        :param W_target: int : target width
+        :param C_target: int : target channel
+        """
         super(ResampleOp, self).__init__(**kwargs)
         self.H_target = H_target
         self.W_target = W_target
@@ -59,8 +63,8 @@ class ResampleOp(keras.layers.Layer):
 
 
 class FastFusion(keras.layers.Layer):
-    def __init__(self, epsilon=1e-4, name=None):
-        super(FastFusion, self).__init__(name=name)
+    def __init__(self, epsilon=1e-4, **kwargs):
+        super(FastFusion, self).__init__(**kwargs)
         self._epsilon = epsilon
 
     def build(self, feature_list):
@@ -98,7 +102,7 @@ class BiFPNLayer(keras.layers.Layer):
         for op_dict in self.op_list:
             feat_size = op_dict['feat_size']
             node_num = len(op_dict['node'])
-            op_dict['resample'] = [ResampleOp(feat_size, feat_size, self.width) for _ in range(node_num)]
+            op_dict['resample'] = [ResampleOp(*feat_size, self.width) for _ in range(node_num)]
             op_dict['fusion'] = FastFusion()
             op_dict['conv'] = keras.Sequential([
                 keras.layers.Activation(self.act_fn),
@@ -136,9 +140,12 @@ class BiFPNLayer(keras.layers.Layer):
 
 
 def get_features_size(input_size, max_level):
-    features_size = [input_size]
+    if isinstance(input_size, int):
+        features_size = [(input_size, input_size)]
+    else:
+        features_size = [input_size]
     for level in range(1, max_level+1):
-        f_size = ceil(features_size[-1] / 2)
+        f_size = (ceil(features_size[-1][0] / 2), ceil(features_size[-1][1] / 2))
         features_size.append(f_size)
     return features_size[1:]
 
@@ -158,7 +165,7 @@ class BiFPN(keras.layers.Layer):
         input_shape = input_shape[self.min_level-1: self.max_level]
         if len(input_shape) < self.num_levels:
             self.downsample_ops = [
-                ResampleOp(size, size, self.width) for size in self.feats_size[len(input_shape)-self.num_levels:]
+                ResampleOp(*size, self.width) for size in self.feats_size[len(input_shape)-self.num_levels:]
             ]
 
         feats_size = self.feats_size[self.min_level-1: self.max_level]

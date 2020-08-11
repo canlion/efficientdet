@@ -32,89 +32,85 @@ def IOU(box, anchor):
     return tf.clip_by_value(intersection / union, 0., 1.)  # (n, N)
 
 
-def effdet_loss(box_preds, cls_preds, box_annos, cls_annos, anchor, classes=20, alpha=.25, gamma=2.):
-    def smooth_l1_loss(box_pred, box_anno, anchor, delta=.1):
-        # sigma_sq = sigma ** 2
-        box_anno = ltrb2xywh(box_anno)
+class EffdetLoss(tf.keras.losses.Loss):
+    def __init__(self, config):
+        super().__init__()
+        self.classes = config.num_classes
+        self.delta = config.delta
+        self.alpha = config.alpha
+        self.gamma = config.gamma
+        self.cls_loss_weight = config.cls_loss_weight
+        self.box_loss_weight = config.box_loss_weight
+
+        # TODO: import generate anchor function and make anchor
+        self.anchor = None
+
+    def huber_loss(self, pred, box_true, anchor):
+        box_true = ltrb2xywh(box_true)
         anchor = ltrb2xywh(anchor)
 
-        box_target_dxy = (box_anno[..., :2] - anchor[..., :2]) / anchor[..., 2:]
-        box_target_dwh = tf.math.log(box_anno[..., 2:] / anchor[..., 2:])
-        box_target = tf.concat([box_target_dxy, box_target_dwh], axis=-1)
+        box_true_xy, box_true_wh = box_true[..., :2], box_true[..., 2:]
+        anchor_xy, anchor_wh = anchor[..., :2], anchor[..., 2:]
 
-        x = box_target - box_pred
+        pred_target_xy = (box_true_xy - anchor_xy) / anchor_wh
+        pred_target_wh = tf.math.log(box_true_wh / anchor_wh)
+        pred_target = tf.concat([pred_target_xy, pred_target_wh], axis=-1)
+
+        x = pred_target - pred
         x_abs = tf.abs(x)
-        huber_loss = tf.where(x_abs <= delta,
-                              0.5 * tf.pow(x_abs, 2),
-                              0.5 * tf.pow(delta, 2) + delta * (x_abs - delta))
-
+        huber_loss = tf.where(x_abs <= self.delta,
+                              .5 * tf.pow(x_abs, 2),
+                              .5 * tf.pow(self.delta, 2) + self.delta * (x_abs - self.delta))
         return keras.backend.sum(huber_loss)
 
-        # box_target_normalize = tf.divide(box_target, tf.constant([[.1, .1, .2, .2]]))
+    def focal_loss(self, pred, cls_true):
+        alpha_factor = self.alpha * tf.ones_like(pred)
+        alpha_factor = tf.where(tf.equal(cls_true, 1), alpha_factor, 1. - alpha_factor)
 
-        # x = box_target_normalize - box_pred
-        # x_abs = tf.abs(x)
-        # s_l1_loss = tf.where(x_abs > (1. / sigma_sq),
-        #                      x_abs - (.5 / sigma_sq),
-        #                      tf.pow(x_abs, 2) * sigma_sq * .5)
-        #
-        #
-        # return tf.reduce_sum(s_l1_loss)
+        focal_weight = tf.where(tf.equal(cls_true, 1), 1. - pred, pred)
+        focal_weight = alpha_factor * tf.pow(focal_weight, self.gamma)
 
-    def focal_loss(cls_target, cls_pred):
-        alpha_factor = alpha * tf.ones_like(cls_pred)
-        alpha_factor = tf.where(tf.equal(cls_target, 1), alpha_factor, 1. - alpha_factor)
-        focal_weight = tf.where(tf.equal(cls_target, 1), 1. - cls_pred, cls_pred)
-        focal_weight = alpha_factor * tf.pow(focal_weight, gamma)
+        bce = keras.backend.binary_crossentropy(cls_true, pred)
+        focal_loss = focal_weight * bce
 
-        bce = keras.backend.binary_crossentropy(cls_target, cls_pred)
-        loss = focal_weight * bce
+        return keras.backend.sum(focal_loss)
 
-        return tf.reduce_sum(loss)
+    def call(self, box_true, box_pred, cls_true, cls_pred):
+        cls_pred = tf.clip_by_value(cls_pred, 1e-4, 1. - 1e-4)
+        batch_size = tf.shape(box_true)[0]
+        loss_sum = 0.
 
-    cls_preds = tf.clip_by_value(cls_preds, 1e-4, 1-1e-4)
-    N = tf.shape(box_preds)[0]
-    loss_sum = 0.
-    for idx in range(N):
-        box_pred = box_preds[idx]
-        box_anno = box_annos[idx]
-        cls_pred = cls_preds[idx]
-        cls_anno = cls_annos[idx]
-        cls_anno = tf.one_hot(cls_anno, depth=classes)
+        for idx in range(batch_size):
+            box_pred_ = box_pred[idx]
+            box_true_ = box_true[idx]
+            cls_true_ = tf.one_hot(cls_true[idx], depth=self.classes)
+            cls_pred_ = cls_pred[idx]
 
-        iou = IOU(box_anno, anchor)
-        iou_max = tf.reduce_max(iou, axis=-1)
-        iou_argmax = tf.argmax(iou, axis=-1)
+            iou = IOU(box_true_, self.anchor)
+            iou_max = tf.reduce_max(iou, axis=-1)
+            iou_argmax = tf.argmax(iou, axis=-1)
 
-        pos_idx = tf.where(iou_max >= .5)[..., -1]
-        neg_idx = tf.where(iou_max < .4)[..., -1]
+            idx_pos = tf.where(iou_max >= .5)[..., -1]
+            idx_neg = tf.where(iou_max < .4)[..., -1]
 
-        pos_box_idx = tf.gather(iou_argmax, pos_idx)
-        pos_box = tf.gather(box_anno, pos_box_idx)
-        pos_box_pred = tf.gather(box_pred, pos_idx)
-        pos_anchor = tf.gather(anchor, pos_idx)
+            idx_box_pos = tf.gather(iou_argmax, idx_pos)
+            box_true_pos = tf.gather(box_true_, idx_box_pos)
+            box_pred_pos = tf.gather(box_pred_, idx_pos)
+            anchor_pos = tf.gather(self.anchor, idx_pos)
 
-        pos_cls_target = tf.gather(cls_anno, pos_box_idx)
-        pos_cls_pred = tf.gather(cls_pred, pos_idx)
-        neg_cls_pred = tf.gather(cls_pred, neg_idx)
+            cls_true_pos = tf.gather(cls_true_, idx_box_pos)
+            cls_pred_pos = tf.gather(cls_pred_, idx_pos)
+            cls_pred_neg = tf.gather(cls_pred_, idx_neg)
 
-        box_loss = 0.
-        cls_loss = 0.
-        num_pos_box = tf.cast(tf.shape(pos_box)[0], tf.float32)
-        if num_pos_box > 0:
-            box_loss += smooth_l1_loss(pos_box_pred, pos_box, pos_anchor)
-            cls_loss += focal_loss(pos_cls_target, pos_cls_pred)
-        cls_loss += focal_loss(tf.zeros_like(neg_cls_pred), neg_cls_pred)
+            box_loss = 0.
+            cls_loss = 0.
+            num_box_pos = tf.cast(tf.shape(box_true_pos)[0], tf.float32)
+            if tf.greater(num_box_pos, 0):
+                box_loss += self.huber_loss(box_pred_pos, box_true_pos, self.anchor)
+                cls_loss += self.focal_loss(cls_pred_pos, cls_true_pos)
+            cls_loss += self.focal_loss(cls_pred_neg, tf.zeros_like(cls_pred_neg))
 
-        box_loss = 50. * box_loss / tf.maximum(1., 4 * num_pos_box)
-        cls_loss = cls_loss / tf.maximum(1., num_pos_box)
-        loss = box_loss + cls_loss
-        loss_sum += loss
+            loss_sum += box_loss * self.box_loss_weight / tf.maximum(1., 4 * num_box_pos) \
+                        + cls_loss * self.cls_loss_weight / tf.maximum(1., num_box_pos)
 
-    return loss_sum / tf.cast(N, tf.float32)
-
-
-if __name__ == '__main__':
-    import numpy as np
-
-    print(ltrb2xywh(np.array([[5, 5, 10, 10]])))
+        return loss_sum / tf.cast(batch_size, tf.float32)

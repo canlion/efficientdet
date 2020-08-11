@@ -9,7 +9,7 @@ from tqdm import tqdm
 from model.efficientdet import EfficientDet
 from data.data_generator import VOCGenerator
 from data.augmenation import get_agumentator
-from lr import CosineLRDecay, LRWarmup
+from train_lib import CosineLRDecay, LRWarmup
 from anchors.anchors import generate_anchor
 from losses import effdet_loss
 

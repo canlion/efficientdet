@@ -1,4 +1,5 @@
 import albumentations as A
+import cv2
 
 
 def get_agumentator(train=True, img_size=(512, 512), min_area=0., min_visibility=0.):
@@ -13,6 +14,7 @@ def get_agumentator(train=True, img_size=(512, 512), min_area=0., min_visibility
 
     if train:
         transform.extend([
+            A.Rotate(limit=5, border_mode=cv2.BORDER_CONSTANT, p=.3),
             A.RandomResizedCrop(height=img_size[0], width=img_size[1], p=.3),
             A.HorizontalFlip(p=.5),
             A.RandomBrightnessContrast(brightness_limit=.3, contrast_limit=.3),

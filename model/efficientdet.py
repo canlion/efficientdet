@@ -1,5 +1,4 @@
 from collections import namedtuple
-from math import ceil
 
 import tensorflow as tf
 import tensorflow.keras as keras
@@ -20,10 +19,10 @@ class EfficientDet(keras.Model):
         self.imgnet_mean = tf.constant([0.485, 0.456, 0.406], shape=(1, 1, 1, 3), name='imagenet_mean')
         self.imgnet_std = tf.constant([0.229, 0.224, 0.225], shape=(1, 1, 1, 3), name='imagenet_std')
 
-    def build(self, shape_list):
+    def build(self):
         c = self.config
-        input_shape = (c.input_size, c.input_size, 3)
-        backbone_input = keras.layers.Input(shape=input_shape)
+        input_shape = (None, c.input_size[0], c.input_size[1], 3)
+        backbone_input = keras.layers.Input(shape=input_shape[1:])
         backbone_output = EfficientNetBase(c.backbone_scale, drop_rate=c.drop_rate).outputs(backbone_input)
         self.effnet = keras.Model(backbone_input, backbone_output)
         if c.freeze_backbone:
@@ -33,14 +32,14 @@ class EfficientDet(keras.Model):
         self.boxnet = BoxNet(self.config)
         self.clsnet = ClsNet(self.config)
 
-        if c.backbone_load_w:
+        if c.backbone_load_weights:
             self.effnet.load_weights(
                 'model/efficientnet_weights/'
                 'efficientnet-{}_weights_tf_dim_ordering_tf_kernels_autoaugment_notop.h5'.format(self.config.backbone_scale.lower()),
                 by_name=True
             )
 
-        super(EfficientDet, self).build(shape_list)
+        super(EfficientDet, self).build(input_shape)
 
     def call(self, inputs, training=None, mask=None):
         outputs = self.normalizer(inputs)
@@ -71,7 +70,7 @@ if __name__ == '__main__':
     os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
     effdet = EfficientDet(config)
-    effdet.build((None, 512, 512, 3))
+    effdet.build()
     effdet.summary()
 
     inputs = np.random.normal(size=(4, 512, 512, 3)).astype(np.float32)

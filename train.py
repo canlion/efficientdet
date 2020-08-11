@@ -8,7 +8,7 @@ from tqdm import tqdm
 from model.efficientdet import EfficientDet
 from data.data_generator import VOCGenerator
 from data.augmenation import get_agumentator
-from lr import CosineLRDecay, LRWarmup
+from train_lib import get_optimizer
 from anchors.anchors import generate_anchor
 from losses import effdet_loss
 from config import get_config
@@ -37,6 +37,9 @@ def parse_args(args):
 
 
 def main(args=None):
+    def l2_reg(model, w=4e-5):
+        return w * tf.add_n([tf.nn.l2_loss(v) for v in model.trainable_variables if v.name.find('kernel') > 0])
+
     @tf.function(
         input_signature=[
             tf.TensorSpec(shape=None, dtype=tf.int32),
@@ -48,7 +51,7 @@ def main(args=None):
         with tf.GradientTape() as tape:
             box_pred, cls_pred = model(imgs, training=True)
             loss = effdet_loss(box_pred, cls_pred, box_true, cls_true, anchor)
-            loss_l2 = loss + tf.reduce_sum(model.losses)
+            loss_l2 = loss + l2_reg(model)
         grad = tape.gradient(loss_l2, model.trainable_variables)
         optimizer.apply_gradients(zip(grad, model.trainable_variables))
         loss_train.update_state(loss)
@@ -83,7 +86,7 @@ def main(args=None):
     # model = EfficientDet(D='D0',
     #                      freeze_backbone=args.freeze_backbone,
     #                      freeze_bn=args.freeze_bn)
-    model.build((None, config.input_size, config.input_size, 3))
+    model.build()
     model.summary()
 
     voc_train = VOCGenerator(data_dir=args.voc_path,
@@ -95,6 +98,7 @@ def main(args=None):
                              drop_remainder=True,
                              )
     step_per_epoch = len(voc_train)
+    config.update('step_per_epoch', step_per_epoch)
     train_ds = voc_train.get_dataset()
 
     voc_valid = VOCGenerator(data_dir=args.voc_path,
@@ -107,11 +111,7 @@ def main(args=None):
     valid_step = len(voc_valid)
     valid_ds = voc_valid.get_dataset()
 
-    lr = CosineLRDecay(init_lr=args.lr, total_batch=step_per_epoch*(args.epochs-1))
-    lr = LRWarmup(scheduler=lr, step=step_per_epoch, init_lr=0.)
-
-    # optimizer = keras.optimizers.Adam(learning_rate=lr)
-    optimizer = keras.optimizers.SGD(learning_rate=lr, momentum=.9)
+    optimizer = get_optimizer(config)
 
     loss_train = keras.metrics.Mean(name='loss_train')
     loss_valid = keras.metrics.Mean(name='loss_valid')

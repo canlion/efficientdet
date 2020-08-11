@@ -18,9 +18,12 @@ class BoxNet(keras.layers.Layer):
                        depthwise_initializer=keras.initializers.VarianceScaling(),
                        pointwise_initializer=keras.initializers.VarianceScaling())
 
-        self.convs = [conv(filters=self.width, name='Box_Conv_{}'.format(i)) for i in range(self.repeat)]
-        self.bns = [keras.layers.BatchNormalization(name='Box_BN_{}'.format(i)) for i in range(self.repeat)]
-        self.acts = [keras.layers.Activation(self.act_fn, name='Box_Act_{}'.format(i)) for i in range(self.repeat)]
+        self.convs = [conv(filters=self.width, name='Box_Conv_{}'.format(repeat)) for repeat in range(self.repeat)]
+        self.bns = [[keras.layers.BatchNormalization(name='Box_BN_{}_{}'.format(level, repeat))
+                     for repeat in range(self.repeat)]
+                    for level in range(len(input_shape))]
+        self.acts = [keras.layers.Activation(self.act_fn, name='Box_Act_{}'.format(repeat))
+                     for repeat in range(self.repeat)]
 
         self.box_head = conv(filters=self.num_anchor*4)
 
@@ -29,8 +32,8 @@ class BoxNet(keras.layers.Layer):
     def call(self, inputs, **kwargs):
         batch_size = tf.shape(inputs[0])[0]
         box_list = list()
-        for feature in inputs:
-            for conv, bn, act in zip(self.convs, self.bns, self.acts):
+        for level, feature in enumerate(inputs):
+            for conv, bn, act in zip(self.convs, self.bns[level], self.acts):
                 feature = act(bn(conv(feature), **kwargs))
             box = self.box_head(feature)
             box_list.append(box)
@@ -55,9 +58,12 @@ class ClsNet(keras.layers.Layer):
                        depthwise_initializer=keras.initializers.VarianceScaling(),
                        pointwise_initializer=keras.initializers.VarianceScaling())
 
-        self.convs = [conv(filters=self.width, name='Cls_Conv_{}'.format(i)) for i in range(self.repeat)]
-        self.bns = [keras.layers.BatchNormalization(name='Cls_BN_{}'.format(i)) for i in range(self.repeat)]
-        self.acts = [keras.layers.Activation(self.act_fn, name='Cls_Act_{}'.format(i)) for i in range(self.repeat)]
+        self.convs = [conv(filters=self.width, name='Cls_Conv_{}'.format(repeat)) for repeat in range(self.repeat)]
+        self.bns = [[keras.layers.BatchNormalization(name='Cls_BN_{}_{}'.format(level, repeat))
+                     for repeat in range(self.repeat)]
+                    for level in range(len(input_shape))]
+        self.acts = [keras.layers.Activation(self.act_fn, name='Cls_Act_{}'.format(repeat))
+                     for repeat in range(self.repeat)]
 
         self.cls_head = conv(filters=self.num_anchor * self.num_classes)
 
@@ -66,8 +72,8 @@ class ClsNet(keras.layers.Layer):
     def call(self, inputs, **kwargs):
         batch_size = tf.shape(inputs[0])[0]
         cls_list = list()
-        for feature in inputs:
-            for conv, bn, act in zip(self.convs, self.bns, self.acts):
+        for level, feature in enumerate(inputs):
+            for conv, bn, act in zip(self.convs, self.bns[level], self.acts):
                 feature = act(bn(conv(feature), **kwargs))
             cls = self.cls_head(feature)
             cls_list.append(cls)
