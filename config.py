@@ -22,8 +22,12 @@ def get_config():
     c.act_fn = k.activations.swish
     c.num_classes = 20
     c.weights_decay = 4e-5
-    c.freeze_backbone = True
+    c.train_batch_size = 4
+    c.valid_batch_size = 64
+
+    # backbone
     c.backbone_scale = 'B0'
+    c.freeze_backbone = False
     c.backbone_load_weights = True
     c.drop_rate = 0.
 
@@ -48,9 +52,9 @@ def get_config():
     c.box_loss_weight = 50.
 
     # anchor
-    c.anchor_scale = 4.
-    c.size_scale = (2**0, 2**(1/3), 2**(2/3),)
-    c.ratio = (.5, 1., 2.)
+    c.anchor_scale = 4
+    c.size_scales = (2**0, 2**(1/3), 2**(2/3),)
+    c.ratios = (.5, 1., 2.)
 
     # training
     c.total_epoch = 300
@@ -62,8 +66,8 @@ def get_config():
     }
 
     c.lr_method = 'cosine'
-    c.lr_init = 1e-3
-    c.lr_warmup = 1e-4
+    c.lr_init = 1e-2
+    c.lr_warmup = 0.
     c.lr_warmup_epoch = 1
 
     # c.lr_method = 'stepwise'

@@ -10,7 +10,7 @@ class BoxNet(keras.layers.Layer):
         self.repeat = config.box_repeat
         self.width = config.box_width
         self.act_fn = config.act_fn
-        self.num_anchor = len(config.size_scale) * len(config.ratio)
+        self.num_anchor = len(config.size_scales) * len(config.ratios)
 
     def build(self, input_shape):
         conv = partial(keras.layers.SeparableConv2D,
@@ -50,7 +50,7 @@ class ClsNet(keras.layers.Layer):
         self.width = config.class_width
         self.act_fn = config.act_fn
         self.num_classes = config.num_classes
-        self.num_anchor = len(config.size_scale) * len(config.ratio)
+        self.num_anchor = len(config.size_scales) * len(config.ratios)
 
     def build(self, input_shape):
         conv = partial(keras.layers.SeparableConv2D,

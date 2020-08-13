@@ -1,6 +1,5 @@
 import argparse
 import json
-from time import time
 
 import tensorflow as tf
 import tensorflow.keras as keras
@@ -10,7 +9,7 @@ from model.efficientdet import EfficientDet
 from data.data_generator import VOCGenerator
 from data.augmenation import get_agumentator
 from train_lib import CosineLRDecay, LRWarmup
-from anchors.anchors import generate_anchor
+from anchors import generate_anchor
 from losses import effdet_loss
 
 

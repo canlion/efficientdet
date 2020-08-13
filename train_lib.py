@@ -13,6 +13,7 @@ class LrSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
     def lr_fn(self, step):
         raise NotImplementedError
 
+    @tf.function
     def __call__(self, step):
         if tf.less_equal(step, self.step_warmup):
             return self.lr_warmup + (self.lr_init - self.lr_warmup) * (step / self.step_warmup)

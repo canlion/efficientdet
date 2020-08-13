@@ -1,6 +1,8 @@
 import tensorflow as tf
 import tensorflow.keras as keras
 
+from anchors import Anchor
+
 
 def ltrb2xywh(arr):
     arr = tf.cast(arr, tf.float32)
@@ -42,8 +44,7 @@ class EffdetLoss(tf.keras.losses.Loss):
         self.cls_loss_weight = config.cls_loss_weight
         self.box_loss_weight = config.box_loss_weight
 
-        # TODO: import generate anchor function and make anchor
-        self.anchor = None
+        self.anchor = tf.cast(Anchor(config).generate_anchor(), tf.float32)
 
     def huber_loss(self, pred, box_true, anchor):
         box_true = ltrb2xywh(box_true)
@@ -75,7 +76,10 @@ class EffdetLoss(tf.keras.losses.Loss):
 
         return keras.backend.sum(focal_loss)
 
-    def call(self, box_true, box_pred, cls_true, cls_pred):
+    def __call__(self, true, pred):
+        box_true, cls_true = true
+        box_pred, cls_pred = pred
+
         cls_pred = tf.clip_by_value(cls_pred, 1e-4, 1. - 1e-4)
         batch_size = tf.shape(box_true)[0]
         loss_sum = 0.
@@ -111,6 +115,6 @@ class EffdetLoss(tf.keras.losses.Loss):
             cls_loss += self.focal_loss(cls_pred_neg, tf.zeros_like(cls_pred_neg))
 
             loss_sum += box_loss * self.box_loss_weight / tf.maximum(1., 4 * num_box_pos) \
-                        + cls_loss * self.cls_loss_weight / tf.maximum(1., num_box_pos)
+                + cls_loss * self.cls_loss_weight / tf.maximum(1., num_box_pos)
 
         return loss_sum / tf.cast(batch_size, tf.float32)

@@ -34,14 +34,14 @@ class EfficientDet(keras.Model):
 
         if c.backbone_load_weights:
             self.effnet.load_weights(
-                'model/efficientnet_weights/'
-                'efficientnet-{}_weights_tf_dim_ordering_tf_kernels_autoaugment_notop.h5'.format(self.config.backbone_scale.lower()),
+                'model/efficientnet_weights/efficientnet-{}_weights_tf_dim_ordering_tf_kernels_autoaugment_notop.h5'
+                .format(self.config.backbone_scale.lower()),
                 by_name=True
             )
 
         super(EfficientDet, self).build(input_shape)
 
-    def call(self, inputs, training=None, mask=None):
+    def call(self, inputs, training=None, mask=None, inference=None):
         outputs = self.normalizer(inputs)
         outputs = self.effnet(outputs, training=training)
         outputs = self.bifpn(outputs, training=training)
