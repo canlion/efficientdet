@@ -1,5 +1,6 @@
 import math
 import tensorflow as tf
+import tensorflow_addons as tfa
 
 
 # learning rate
@@ -81,8 +82,16 @@ def get_lr_schedule(config):
 def get_optimizer(config):
     lr_schedule = get_lr_schedule(config)
     if config.optimizer.lower() == 'sgd':
-        return tf.keras.optimizers.SGD(learning_rate=lr_schedule, **config.optimizer_config)
+        opt = tf.keras.optimizers.SGD(learning_rate=lr_schedule, **config.optimizer_config)
     elif config.optimizer.lower() == 'adam':
-        return tf.keras.optimizers.Adam(learning_rate=lr_schedule, **config.optimizer_config)
+        opt = tf.keras.optimizers.Adam(learning_rate=lr_schedule, **config.optimizer_config)
     else:
         raise ValueError('undefined optimizer key : {}'.format(config.optimizer))
+
+    if config.moving_average_decay is not None:
+        opt = tfa.optimizers.MovingAverage(opt, average_decay=config.moving_average_decay)
+
+    if config.mixed_precision:
+        opt = tf.keras.mixed_precision.experimental.LossScaleOptimizer(opt, loss_scale='dynamic')
+
+    return opt

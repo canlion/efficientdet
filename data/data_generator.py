@@ -180,12 +180,12 @@ class VOCGenerator:
 
 
 if __name__ == '__main__':
-    from data.augmenation import get_agumentator
+    from data.augmenation import get_augmentator
     ds = VOCGenerator('/mnt/hdd/jinwoo/sandbox_datasets/voc_download',
                       [[2012, 'train'], [2007, 'val']],
-                      get_agumentator('train', (512, 512), min_visibility=.2),
+                      get_augmentator('train', (512, 512), min_visibility=.2),
                       '.jpg',
-                      4,)
+                      4, )
 
     ds = ds.get_dataset()
 

@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 from model.efficientdet import EfficientDet
 from data.data_generator import VOCGenerator
-from data.augmenation import get_agumentator
+from data.augmenation import get_augmentator
 from train_lib import get_optimizer
 from losses import EffdetLoss
 from config import get_config
@@ -38,10 +38,14 @@ def main(args=None):
     )
     def train(imgs, cls_true, box_true):
         with tf.GradientTape() as tape:
-            pred = model(imgs, training=True)
-            loss = effdet_loss((box_true, cls_true), pred)
+            box_pred, cls_pred = model(imgs, training=True)
+            loss = effdet_loss((box_true, cls_true), (tf.cast(box_pred, tf.float32), tf.cast(cls_pred, tf.float32)))
             loss_l2 = loss + l2_reg(model)
+            if config.mixed_precision:
+                loss_l2 = optimizer.get_scaled_loss(loss_l2)
         grad = tape.gradient(loss_l2, model.trainable_variables)
+        if config.mixed_precision:
+            grad = optimizer.get_unscaled_gradients(grad)
         optimizer.apply_gradients(zip(grad, model.trainable_variables))
         loss_train.update_state(loss)
 
@@ -53,8 +57,8 @@ def main(args=None):
         ]
     )
     def eval(imgs, cls_true, box_true):
-        pred = model(imgs, training=False)
-        loss = effdet_loss((box_true, cls_true), pred)
+        box_pred, cls_pred = model(imgs, training=False)
+        loss = effdet_loss((box_true, cls_true), (tf.cast(box_pred, tf.float32), tf.cast(cls_pred, tf.float32)))
         loss_valid.update_state(loss)
 
     args = parse_args(args)
@@ -72,13 +76,18 @@ def main(args=None):
     config = get_config()
     print('freeze backbone : {}'.format(config.freeze_backbone))
 
+    if config.mixed_precision:
+        policy = keras.mixed_precision.experimental.Policy('mixed_float16')
+        keras.mixed_precision.experimental.set_policy(policy)
+        tf.config.optimizer.set_jit(True)
+
     model = EfficientDet(config)
     model.build()
     model.summary()
 
     voc_train = VOCGenerator(data_dir=args.voc_path,
                              version_set_pairs=args.train_pair,
-                             augmentation_unit=get_agumentator(train=True,
+                             augmentation_unit=get_augmentator(train=True,
                                                                img_size=config.input_size,
                                                                min_visibility=.3),
                              batch_size=config.train_batch_size,
@@ -90,7 +99,7 @@ def main(args=None):
 
     voc_valid = VOCGenerator(data_dir=args.voc_path,
                              version_set_pairs=args.valid_pair,
-                             augmentation_unit=get_agumentator(train=False,
+                             augmentation_unit=get_augmentator(train=False,
                                                                img_size=config.input_size,),
                              batch_size=config.valid_batch_size,
                              drop_remainder=False,

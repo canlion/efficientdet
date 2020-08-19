@@ -22,12 +22,12 @@ def get_config():
     c.act_fn = k.activations.swish
     c.num_classes = 20
     c.weights_decay = 4e-5
-    c.train_batch_size = 4
+    c.train_batch_size = 8
     c.valid_batch_size = 64
 
     # backbone
     c.backbone_scale = 'B0'
-    c.freeze_backbone = False
+    c.freeze_backbone = True
     c.backbone_load_weights = True
     c.drop_rate = 0.
 
@@ -59,11 +59,13 @@ def get_config():
     # training
     c.total_epoch = 300
     c.step_per_epoch = None
+    c.mixed_precision = False
 
     c.optimizer = 'SGD'
     c.optimizer_config = {
         'momentum': .9
     }
+    c.moving_average_decay = .9998
 
     c.lr_method = 'cosine'
     c.lr_init = 1e-2
@@ -78,7 +80,5 @@ def get_config():
     # c.lr_init = 1e-3
     # c.lr_warmup = 1e-4
     # c.lr_warmup_epoch = 1
-
-
 
     return c

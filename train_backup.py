@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 from model.efficientdet import EfficientDet
 from data.data_generator import VOCGenerator
-from data.augmenation import get_agumentator
+from data.augmenation import get_augmentator
 from train_lib import CosineLRDecay, LRWarmup
 from anchors import generate_anchor
 from losses import effdet_loss
@@ -56,7 +56,7 @@ def main(args=None):
 
     voc_train = VOCGenerator(data_dir=args.voc_path,
                              version_set_pairs=args.train_pair,
-                             augmentation_unit=get_agumentator(train=True,
+                             augmentation_unit=get_augmentator(train=True,
                                                                img_size=model.effdet_args.input_size,
                                                                min_visibility=.3),
                              batch_size=args.batch_size,
@@ -67,8 +67,8 @@ def main(args=None):
 
     voc_valid = VOCGenerator(data_dir=args.voc_path,
                              version_set_pairs=args.valid_pair,
-                             augmentation_unit=get_agumentator(train=False,
-                                                               img_size=model.effdet_args.input_size,),
+                             augmentation_unit=get_augmentator(train=False,
+                                                               img_size=model.effdet_args.input_size, ),
                              batch_size=args.batch_size,
                              # image_size=model.effdet_args.input_size,
                              )
