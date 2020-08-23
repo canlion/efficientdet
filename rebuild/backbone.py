@@ -1,5 +1,6 @@
 import math
-from typing import NamedTuple
+from typing import Callable
+from dataclasses import dataclass, replace, asdict
 from functools import partial
 
 import tensorflow.keras as keras
@@ -9,39 +10,69 @@ CONV_INIT = keras.initializers.VarianceScaling(scale=2., mode='fan_out', distrib
 DENSE_INIT = keras.initializers.VarianceScaling(scale=1/3, mode='fan_out', distribution='uniform')
 
 
-class BlockArgs(NamedTuple):
+@dataclass
+class BlockArgs:
+    repeat: int
     kernel_size: int
     strides: int
     filters_in: int
     filters_out: int
     expand_ratio: int
     se_ratio: float
-    repeat: int
 
 
-class NetArgs(NamedTuple):
+@dataclass
+class EffnetParams:
     width_coefficient: float
     depth_coefficient: float
     dropout_rate: float
+    drop_depth_rate: float
 
 
-class EfficientnetParams(NamedTuple):
-    bn_momentum: float
-    bn_epsilon: float
-    survival_prob: float
-    depth_divisor: int
+@dataclass
+class EffnetHParams:
+    bn_momentum: float = .99
+    bn_epsilon: float = 1e-3
+    depth_divisor: int = 8
+    act_fn: Callable = keras.activations.swish
+
+
+@dataclass
+class EffnetAllParams(EffnetHParams, EffnetParams):
+    pass
+
+
+default_blockargs_list = [
+    BlockArgs(1, 3, 1, 32, 16, 1, .25),
+    BlockArgs(2, 3, 2, 16, 24, 6, .25),
+    BlockArgs(2, 5, 2, 24, 40, 6, .25),
+    BlockArgs(3, 3, 2, 40, 80, 6, .25),
+    BlockArgs(3, 5, 2, 80, 112, 6, .25),
+    BlockArgs(4, 5, 2, 112, 192, 6, .25),
+    BlockArgs(1, 3, 1, 192, 320, 6, .25),
+]
+
+effnet_params_dict = {
+    'efficientnet-b0': EffnetParams(1., 1., .2, 1.),
+    'efficientnet-b1': EffnetParams(1.,  1.1, .2, .8),
+    'efficientnet-b2': EffnetParams(1.1, 1.2, .3, .8),
+    'efficientnet-b3': EffnetParams(1.2, 1.4, .3, .8),
+    'efficientnet-b4': EffnetParams(1.4, 1.8, .4, .8),
+    'efficientnet-b5': EffnetParams(1.6, 2.2, .4, .8),
+    'efficientnet-b6': EffnetParams(1.8, 2.6, .5, .8),
+    'efficientnet-b7': EffnetParams(2.0, 3.1, .5, .8),
+}
 
 
 def get_effnet_params(config):
-    params = EfficientnetParams(
-        bn_momentum=.99,
-        bn_epsilon=1e-3,
-        survival_prob=0. if config.backbone_name.endswith('b0') else .8,
-        depth_divisor=8,
-    )
-    if config.backbone_args:
-        params = params._replace(**config.backbone_args)
-    return params
+    hparams = EffnetHParams()
+    if config.backbone_config is not None:
+        hparams = replace(hparams, **config.backbone_config)
+
+    params = effnet_params_dict[config.backbone_name]
+    all_params = EffnetAllParams(**asdict(hparams), **asdict(params))
+
+    return all_params
 
 
 def round_filters(filters: int,
@@ -68,45 +99,71 @@ def round_repeat(repeat: int,
     return int(math.ceil(repeat))
 
 
-class Efficientnet(keras.Model):
-    # EfficientNet Default Configuration - (B0)
-    DEFAULT_BLOCK_ARGS = [
-        BlockArgs(kernel_size=3, strides=1, filters_in=32, filters_out=16,
-                  expand_ratio=1, se_ratio=.25, repeat=1),
-        BlockArgs(kernel_size=3, strides=2, filters_in=16, filters_out=24,
-                  expand_ratio=6, se_ratio=.25, repeat=2),
-        BlockArgs(kernel_size=5, strides=2, filters_in=24, filters_out=40,
-                  expand_ratio=6, se_ratio=.25, repeat=2),
-        BlockArgs(kernel_size=3, strides=2, filters_in=40, filters_out=80,
-                  expand_ratio=6, se_ratio=.25, repeat=3),
-        BlockArgs(kernel_size=5, strides=1, filters_in=80, filters_out=112,
-                  expand_ratio=6, se_ratio=.25, repeat=3),
-        BlockArgs(kernel_size=5, strides=2, filters_in=112, filters_out=192,
-                  expand_ratio=6, se_ratio=.25, repeat=4),
-        BlockArgs(kernel_size=3, strides=1, filters_in=192, filters_out=320,
-                  expand_ratio=6, se_ratio=.25, repeat=1)
-    ]
+class Stem(keras.layers.Layer):
+    def __init__(self,
+                 params: EffnetAllParams,
+                 output_ch: int,
+                 name: str = 'stem'):
+        super().__init__(name=name)
 
-    EFFICIENTNET_ARGS = {
-        'efficientnet-b0': NetArgs(width_coefficient=1., depth_coefficient=1., dropout_rate=.2),
-        'efficientnet-b1': NetArgs(width_coefficient=1., depth_coefficient=1.1, dropout_rate=.2),
-        'efficientnet-b2': NetArgs(width_coefficient=1.1, depth_coefficient=1.2, dropout_rate=.3),
-        'efficientnet-b3': NetArgs(width_coefficient=1.2, depth_coefficient=1.4, dropout_rate=.3),
-        'efficientnet-b4': NetArgs(width_coefficient=1.4, depth_coefficient=1.8, dropout_rate=.4),
-        'efficientnet-b5': NetArgs(width_coefficient=1.6, depth_coefficient=2.2, dropout_rate=.4),
-        'efficientnet-b6': NetArgs(width_coefficient=1.8, depth_coefficient=2.6, dropout_rate=.5),
-        'efficientnet-b7': NetArgs(width_coefficient=2.0, depth_coefficient=3.1, dropout_rate=.5),
-    }
+        self.conv = keras.layers.Conv2D(
+            filters=output_ch,
+            kernel_size=3,
+            strides=2,
+            padding='same',
+            use_bias=False,
+            kernel_initializer=CONV_INIT
+        )
 
-    def __init__(self, config):
-        super(Efficientnet, self).__init__()
-        effnet_params = get_effnet_params(config)
-        effnet_args = self.EFFICIENTNET_ARGS[config.backbone_name]
+        self.bn = keras.layers.experimental.SyncBatchNormalization(
+            momentum=params.bn_momentum,
+            epsilon=params.bn_epsilon
+        )
 
-        self.round_filters = partial(round_filters,
-                                     width_coefficient=effnet_args.width_coefficient,
-                                     depth_divisor=effnet_params.depth_divisor,)
-        self.round_repeat = partial(round_repeat,
-                                    depth_coefficient=effnet_args.depth_coefficient)
+        self.act_fn = params.act_fn
 
-        self.dropout_rate = effnet_args.dropout_rate
+    def call(self, inputs, **kwargs):
+        return self.act_fn(self.bn(self.conv(inputs), **kwargs))
+
+
+class MBConv(keras.layers.Layer):
+    def __init__(self,
+                 kernel_size: int,
+                 strides: int,
+                 filters_in: int,
+                 filters_out: int,
+                 expand_ratio: int,
+                 se_ratio: float,
+                 params: EffnetAllParams,
+                 name: str = None):
+        super().__init__(name=name)
+
+        if expand_ratio > 1:
+            self.conv_expand = keras.layers.Conv2D(
+                filters=filters_in*expand_ratio,
+                kernel_size=kernel_size,
+                strides=strides,
+                padding='same',
+                use_bias=False,
+                kernel_initializer=CONV_INIT
+            )
+            self.bn_expand = keras.layers.experimental.SyncBatchNormalization(
+
+            )
+
+
+
+class EffNet(keras.Model):
+    def __init__(self,
+                 params: EffnetAllParams,
+                 name: str = None):
+        super().__init__(name=name)
+
+        blockargs_list = default_blockargs_list
+
+        round_filters_partial = partial(round_filters,
+                                        width_coefficient=params.width_coefficient,
+                                        depth_divisor=params.depth_divisor)
+        round_repeat_partial = partial(round_repeat, depth_coefficient=params.depth_coefficient)
+
+        self.stem = Stem(params, round_filters_partial(filters=blockargs_list[0].filters_in))
