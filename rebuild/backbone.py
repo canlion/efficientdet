@@ -1,5 +1,5 @@
 import math
-from typing import Callable
+from typing import Callable, Tuple
 from dataclasses import dataclass, replace, asdict
 from functools import partial
 from itertools import count
@@ -33,6 +33,7 @@ class EffnetParams:
 
 @dataclass
 class EffnetHParams:
+    input_size: Tuple[int, int] = (512, 512)
     bn_momentum: float = .99
     bn_epsilon: float = 1e-3
     depth_divisor: int = 8
@@ -102,239 +103,182 @@ def round_repeat(repeat: int,
     return int(math.ceil(repeat))
 
 
-def stem_layer(params: EffnetAllParams,
+def build_se(x,
+             filters_reduce: int,
+             filters_expand: int):
+    inputs = x
+    x = tf.reduce_mean(x, [1, 2], keepdims=True)
+    x = keras.layers.Conv2D(
+        filters=filters_reduce,
+        kernel_size=1,
+        strides=1,
+        padding='same',
+        use_bias=True,
+        kernel_initializer=CONV_INIT)(x)
+    x = keras.activations.relu(x)
+
+    x = keras.layers.Conv2D(
+        filters=filters_expand,
+        kernel_size=1,
+        strides=1,
+        padding='same',
+        use_bias=True,
+        kernel_initializer=CONV_INIT)(x)
+    x = keras.activations.sigmoid(x)
+
+    return x * inputs
+
+
+def build_stem(x,
+               params: EffnetAllParams,
                output_ch: int,
                name_prefix: str = None):
-    pass
+    x = keras.layers.Conv2D(
+        filters=output_ch,
+        kernel_size=3,
+        strides=2,
+        padding='same',
+        use_bias=False,
+        kernel_initializer=CONV_INIT)(x)
+    x = keras.layers.experimental.SyncBatchNormalization(
+        momentum=params.bn_momentum,
+        epsilon=params.bn_epsilon)(x)
+    x = params.act_fn(x)
+
+    return x
 
 
-class Stem(keras.layers.Layer):
-    def __init__(self,
-                 params: EffnetAllParams,
-                 output_ch: int,
-                 name: str = None):
-        super().__init__(name=name)
+def build_mbconv_block(x,
+                       kernel_size: int,
+                       strides: int,
+                       filters_in: int,
+                       filters_out: int,
+                       expand_ratio: int,
+                       se_ratio: float,
+                       survival_prob: float,
+                       params: EffnetAllParams,
+                       name_prefix: str = None):
+    batch_norm = partial(keras.layers.experimental.SyncBatchNormalization,
+                         momentum=params.bn_momentum,
+                         epsilon=params.bn_epsilon)
+    inputs = x
 
-        self.conv = keras.layers.Conv2D(
-            filters=output_ch,
-            kernel_size=3,
-            strides=2,
-            padding='same',
-            use_bias=False,
-            kernel_initializer=CONV_INIT
-        )
-
-        self.bn = keras.layers.experimental.SyncBatchNormalization(
-            momentum=params.bn_momentum,
-            epsilon=params.bn_epsilon
-        )
-
-        self.act_fn = params.act_fn
-
-    def call(self, inputs, **kwargs):
-        return self.act_fn(self.bn(self.conv(inputs), **kwargs))
-
-
-class MBConv(keras.layers.Layer):
-    def __init__(self,
-                 kernel_size: int,
-                 strides: int,
-                 filters_in: int,
-                 filters_out: int,
-                 expand_ratio: int,
-                 se_ratio: float,
-                 survival_prob: float,
-                 params: EffnetAllParams,
-                 name: str = None):
-        super().__init__(name=name)
-
-        self.act_fn = params.act_fn
-        self.reduction = (strides > 1)
-        batch_norm = partial(keras.layers.experimental.SyncBatchNormalization,
-                             momentum=params.bn_momentum,
-                             epsilon=params.bn_epsilon)
-
-        filters_expand = filters_in * expand_ratio
-        if expand_ratio > 1:
-            self.conv_expand = keras.layers.Conv2D(
-                filters=filters_expand,
-                kernel_size=1,
-                strides=1,
-                padding='same',
-                use_bias=False,
-                kernel_initializer=CONV_INIT
-            )
-            self.bn_expand = batch_norm()
-
-        self.conv_depthwise = keras.layers.DepthwiseConv2D(
-            kernel_size=kernel_size,
-            strides=strides,
-            padding='same',
-            use_bias=False,
-            depthwise_initializer=CONV_INIT,
-        )
-        self.bn_depthwise = batch_norm()
-
-        filters_se = max(1, int(filters_in*se_ratio))
-        self.conv_se_reduce = keras.layers.Conv2D(
-            filters=filters_se,
-            kernel_size=1,
-            strides=1,
-            padding='same',
-            use_bias=True,
-            kernel_initializer=CONV_INIT
-        )
-        self.conv_se_expand = keras.layers.Conv2D(
+    filters_expand = filters_in * expand_ratio
+    if expand_ratio > 1:
+        x = keras.layers.Conv2D(
             filters=filters_expand,
             kernel_size=1,
             strides=1,
             padding='same',
-            use_bias=True,
-            kernel_initializer=CONV_INIT
-        )
-
-        self.conv_project = keras.layers.Conv2D(
-            filters=filters_out,
-            kernel_size=1,
-            strides=1,
-            padding='same',
             use_bias=False,
-            kernel_initializer=CONV_INIT
-        )
-        self.bn_project = batch_norm()
+            kernel_initializer=CONV_INIT)(x)
+        x = params.act_fn(batch_norm()(x))
 
-        self.id_skip = (strides == 1) and (filters_in == filters_out)
-        if self.id_skip and survival_prob:
-            self.drop_depth = keras.layers.Dropout(
-                rate=1-survival_prob,
-                noise_shape=[None, 1, 1, 1]
-            )
+    x = keras.layers.DepthwiseConv2D(
+        kernel_size=kernel_size,
+        strides=strides,
+        padding='same',
+        use_bias=False,
+        depthwise_initializer=CONV_INIT)(x)
+    x = params.act_fn(batch_norm()(x))
 
-    def se(self, inputs):
-        se_squeeze = tf.reduce_mean(inputs, axis=[2, 3], keepdims=True)
-        se_reduce = keras.activations.relu(self.conv_se_reduce(se_squeeze))
-        se_expand = keras.activations.sigmoid(self.conv_se_expand(se_reduce))
-        return se_expand * inputs
+    filters_reduce = max(1, int(filters_in * se_ratio))
+    x = build_se(x, filters_reduce=filters_reduce, filters_expand=filters_expand)
 
-    def call(self, inputs, **kwargs):
-        outputs = inputs
-        if hasattr(self, 'conv_expand'):
-            outputs = self.act_fn(self.bn_expand(self.conv_expand(outputs), **kwargs))
-        outputs = self.act_fn(self.bn_depthwise(self.conv_depthwise(outputs), **kwargs))
-        outputs = self.se(outputs)
-        outputs = self.act_fn(self.bn_project(self.conv_project(outputs), **kwargs))
-        if self.id_skip:
-            if hasattr(self, 'drop_depth'):
-                outputs = self.drop_depth(outputs, **kwargs)
-            outputs = outputs + inputs
-        return outputs
+    x = keras.layers.Conv2D(
+        filters=filters_out,
+        kernel_size=1,
+        strides=1,
+        padding='same',
+        use_bias=False,
+        kernel_initializer=CONV_INIT)(x)
+    x = params.act_fn(batch_norm()(x))
 
-
-class Head(keras.layers.Layer):
-    def __init__(self,
-                 params: EffnetAllParams,
-                 output_ch: int,
-                 num_classes: int = 1000):
-        super().__init__()
-
-        self.act_fn = params.act_fn
-
-        self.conv_head = keras.layers.Conv2D(
-            filters=output_ch,
-            kernel_size=1,
-            strides=1,
-            padding='same',
-            use_bias=False,
-            kernel_initializer=CONV_INIT,
-        )
-        self.bn_head = keras.layers.experimental.SyncBatchNormalization(
-            momentum=params.bn_momentum,
-            epsilon=params.bn_epsilon,
-        )
-
-        self.gap = keras.layers.GlobalAveragePooling2D()
-        self.dropout = keras.layers.Dropout(rate=params.dropout_rate)
-        self.fc = keras.layers.Dense(
-            units=num_classes,
-            kernel_initializer=DENSE_INIT,
-        )
-
-    def call(self, inputs, **kwargs):
-        outputs = inputs
-        outputs = self.act_fn(self.bn_head(self.conv_head(outputs), **kwargs))
-        outputs = self.gap(outputs)
-        outputs = self.dropout(outputs, **kwargs)
-        outputs = self.fc(outputs)
-
-        return outputs
+    if (strides == 1) and (filters_in == filters_out):
+        if survival_prob:
+            x = keras.layers.Dropout(rate=1-survival_prob, noise_shape=[None, 1, 1, 1])(x)
+        x = x + inputs
+    return x
 
 
-class EffNet(keras.Model):
-    def __init__(self,
-                 params: EffnetAllParams,
+def build_head(x,
+               params: EffnetAllParams,
+               output_ch: int,
+               num_classes: int = 1000,
+               name_prefix: str = None):
+    x = keras.layers.Conv2D(
+        filters=output_ch,
+        kernel_size=1,
+        strides=1,
+        padding='same',
+        use_bias=False,
+        kernel_initializer=CONV_INIT)(x)
+    x = keras.layers.experimental.SyncBatchNormalization(
+        momentum=params.bn_momentum,
+        epsilon=params.bn_epsilon)(x)
+    x = params.act_fn(x)
+
+    x = keras.layers.GlobalAveragePooling2D()(x)
+    x = keras.layers.Dropout(rate=params.dropout_rate)(x)
+    x = keras.layers.Dense(
+        units=num_classes,
+        kernel_initializer=DENSE_INIT)(x)
+
+    return x
+
+
+def build_effnet(params: EffnetAllParams,
                  name: str = None):
-        super().__init__(name=name)
+    round_filters_partial = partial(round_filters,
+                                    width_coefficient=params.width_coefficient,
+                                    depth_divisor=params.depth_divisor)
+    round_repeat_partial = partial(round_repeat,
+                                   depth_coefficient=params.depth_coefficient)
 
-        round_filters_partial = partial(round_filters,
-                                        width_coefficient=params.width_coefficient,
-                                        depth_divisor=params.depth_divisor)
-        round_repeat_partial = partial(round_repeat,
-                                       depth_coefficient=params.depth_coefficient)
+    blockargs_list = [
+        replace(args,
+                repeat=round_repeat_partial(args.repeat),
+                filters_in=round_filters_partial(args.filters_in),
+                filters_out=round_filters_partial(args.filters_out))
+        for args in default_blockargs_list
+    ]
 
-        # update BlockArgs
-        blockargs_list = [
-            replace(args,
-                    repeat=round_repeat_partial(args.repeat),
-                    filters_in=round_filters_partial(args.filters_in),
-                    filters_out=round_filters_partial(args.filters_out))
-            for args in default_blockargs_list
-        ]
+    x = keras.layers.Input(shape=(*params.input_size, 3))
+    inputs = x
 
-        # stem
-        self.stem = Stem(params, blockargs_list[0].filters_in)
-        # # MBConv blocks
-        # self.blocks = list()
-        # total_blocks = sum([args.repeat for args in blockargs_list])
-        # block_cnt = count(0)
-        # survival_prob = params.survival_prob
-        # depth_drop_rate_unit = (1-survival_prob) / total_blocks
-        # for args in blockargs_list:
-        #     for idx in range(args.repeat):
-        #         block_no = next(block_cnt)
-        #         if params.survival_prob:
-        #             survival_prob = 1 - depth_drop_rate_unit * block_no
-        #         self.blocks.append(
-        #             MBConv(
-        #                 kernel_size=args.kernel_size,
-        #                 strides=args.strides,
-        #                 filters_in=args.filters_in,
-        #                 filters_out=args.filters_out,
-        #                 expand_ratio=args.expand_ratio,
-        #                 se_ratio=args.se_ratio,
-        #                 survival_prob=survival_prob,
-        #                 params=params,
-        #                 name=self.name+'/blocks_{}'.format(block_no)
-        #             )
-        #         )
-        #         if (idx == 0) and (args.strides == 2):
-        #             args = replace(args, strides=1)
-        # # head
-        # self.head = Head(params, round_filters_partial(1280))
+    x = build_stem(x, params, blockargs_list[0].filters_in)
 
-    def call(self, inputs, training=None, mask=None):
-        self.feature_list = list()
+    feature_list = list()
+    total_blocks = sum(args.repeat for args in blockargs_list)
+    block_cnt = count(0)
+    survival_prob = params.survival_prob
+    depth_drop_rate_unit = (1 - survival_prob) / total_blocks
+    for args in blockargs_list:
+        for idx in range(args.repeat):
+            block_no = next(block_cnt)
+            if params.survival_prob:
+                survival_prob = 1 - depth_drop_rate_unit * block_no
+            x = build_mbconv_block(
+                x=x,
+                kernel_size=args.kernel_size,
+                strides=args.strides,
+                filters_in=args.filters_in,
+                filters_out=args.filters_out,
+                expand_ratio=args.expand_ratio,
+                se_ratio=args.se_ratio,
+                survival_prob=survival_prob,
+                params=params
+            )
+            if idx == 0:
+                args = replace(args,
+                               strides=1,
+                               filters_in=args.filters_out)
+        # if (block_no == total_blocks - 1) or (blockargs_list[idx+1].strides > 1):
+        #     feature_list.append(x)
 
-        outputs = inputs
-        outputs = self.stem(outputs, training=training)
-        #
-        # for idx, block in enumerate(self.blocks):
-        #     outputs = block(outputs, training=training)
-        #     if (idx == len(self.blocks) - 1) or self.blocks[idx+1].reduction:
-        #         self.feature_list.append(outputs)
-        #
-        # outputs = self.head(outputs, training=training)
+    x = build_head(x, params, round_filters_partial(1280))
 
-        return outputs
+    model = keras.Model(inputs=inputs, outputs=x)
+    model.summary()
 
-
-
+    model.load_weights('./efficientnet-b0_weights_tf_dim_ordering_tf_kernels_autoaugment.h5',)
