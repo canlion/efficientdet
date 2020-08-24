@@ -38,8 +38,5 @@ def get_default_config():
     c.backbone_name = 'efficientnet-b0'
     c.backbone_config = {}
 
-    c.act_fn = keras.activations.swish
-
-    c.bn_momentum = .99
-    c.bn_epsilon = .001
+    return c
 
