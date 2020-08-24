@@ -102,6 +102,12 @@ def round_repeat(repeat: int,
     return int(math.ceil(repeat))
 
 
+def stem_layer(params: EffnetAllParams,
+               output_ch: int,
+               name_prefix: str = None):
+    pass
+
+
 class Stem(keras.layers.Layer):
     def __init__(self,
                  params: EffnetAllParams,
