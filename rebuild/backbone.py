@@ -72,6 +72,7 @@ def get_effnet_params(config):
     hparams = EffnetHParams()
     if config.backbone_config:
         hparams = replace(hparams, **config.backbone_config)
+    hparams.act_fn = partial(keras.layers.Activation, activation=hparams.act_fn)
 
     params = effnet_params_dict[config.backbone_name]
     all_params = EffnetAllParams(**asdict(hparams), **asdict(params))
@@ -105,7 +106,8 @@ def round_repeat(repeat: int,
 
 def build_se(x,
              filters_reduce: int,
-             filters_expand: int):
+             filters_expand: int,
+             name_prefix: str = None):
     inputs = x
     x = tf.reduce_mean(x, [1, 2], keepdims=True)
     x = keras.layers.Conv2D(
@@ -114,8 +116,10 @@ def build_se(x,
         strides=1,
         padding='same',
         use_bias=True,
-        kernel_initializer=CONV_INIT)(x)
-    x = keras.activations.relu(x)
+        kernel_initializer=CONV_INIT,
+        name=name_prefix+'/se/reduce')(x)
+    # x = keras.activations.relu(x)
+    x = keras.layers.ReLU(name=name_prefix+'/se/relu')(x)
 
     x = keras.layers.Conv2D(
         filters=filters_expand,
@@ -123,8 +127,10 @@ def build_se(x,
         strides=1,
         padding='same',
         use_bias=True,
-        kernel_initializer=CONV_INIT)(x)
-    x = keras.activations.sigmoid(x)
+        kernel_initializer=CONV_INIT,
+        name=name_prefix+'/se/expand')(x)
+    # x = keras.activations.sigmoid(x)
+    x = keras.layers.Activation('sigmoid', name=name_prefix+'/se/sigmoid')(x)
 
     return x * inputs
 
@@ -139,11 +145,14 @@ def build_stem(x,
         strides=2,
         padding='same',
         use_bias=False,
-        kernel_initializer=CONV_INIT)(x)
+        kernel_initializer=CONV_INIT,
+        name=name_prefix+'/conv')(x)
     x = keras.layers.experimental.SyncBatchNormalization(
         momentum=params.bn_momentum,
-        epsilon=params.bn_epsilon)(x)
-    x = params.act_fn(x)
+        epsilon=params.bn_epsilon,
+        name=name_prefix+'/bn')(x)
+    # x = params.act_fn(x)
+    x = params.act_fn(name=name_prefix+'/activation')(x)
 
     return x
 
@@ -171,19 +180,28 @@ def build_mbconv_block(x,
             strides=1,
             padding='same',
             use_bias=False,
-            kernel_initializer=CONV_INIT)(x)
-        x = params.act_fn(batch_norm()(x))
+            kernel_initializer=CONV_INIT,
+            name=name_prefix+'/conv_expand')(x)
+        # x = params.act_fn(batch_norm(name=name_prefix+'/bn_expand')(x))
+        x = batch_norm(name=name_prefix+'/bn_expand')(x)
+        x = params.act_fn(name=name_prefix+'/activation_expand')(x)
 
     x = keras.layers.DepthwiseConv2D(
         kernel_size=kernel_size,
         strides=strides,
         padding='same',
         use_bias=False,
-        depthwise_initializer=CONV_INIT)(x)
-    x = params.act_fn(batch_norm()(x))
+        depthwise_initializer=CONV_INIT,
+        name=name_prefix+'/conv_dw')(x)
+    # x = params.act_fn(batch_norm(name=name_prefix+'/bn_dw')(x))
+    x = batch_norm(name=name_prefix+'/bn_dw')(x)
+    x = params.act_fn(name=name_prefix+'/activation_dw')(x)
 
     filters_reduce = max(1, int(filters_in * se_ratio))
-    x = build_se(x, filters_reduce=filters_reduce, filters_expand=filters_expand)
+    x = build_se(x,
+                 filters_reduce=filters_reduce,
+                 filters_expand=filters_expand,
+                 name_prefix=name_prefix)
 
     x = keras.layers.Conv2D(
         filters=filters_out,
@@ -191,13 +209,18 @@ def build_mbconv_block(x,
         strides=1,
         padding='same',
         use_bias=False,
-        kernel_initializer=CONV_INIT)(x)
-    x = params.act_fn(batch_norm()(x))
+        kernel_initializer=CONV_INIT,
+        name=name_prefix+'/conv_proj')(x)
+    # x = params.act_fn(batch_norm(name=name_prefix+'/bn_proj')(x))
+    x = batch_norm(name=name_prefix+'/bn_proj')(x)
+    x = params.act_fn(name=name_prefix+'/activation_proj')(x)
 
     if (strides == 1) and (filters_in == filters_out):
         if survival_prob:
-            x = keras.layers.Dropout(rate=1-survival_prob, noise_shape=[None, 1, 1, 1])(x)
-        x = x + inputs
+            x = keras.layers.Dropout(rate=1-survival_prob,
+                                     noise_shape=[None, 1, 1, 1],
+                                     name=name_prefix+'/depth_drop')(x)
+        x = tf.add(x, inputs, name=name_prefix+'/identity_skip')
     return x
 
 
@@ -212,22 +235,29 @@ def build_head(x,
         strides=1,
         padding='same',
         use_bias=False,
-        kernel_initializer=CONV_INIT)(x)
+        kernel_initializer=CONV_INIT,
+        name=name_prefix+'/conv')(x)
     x = keras.layers.experimental.SyncBatchNormalization(
         momentum=params.bn_momentum,
-        epsilon=params.bn_epsilon)(x)
-    x = params.act_fn(x)
+        epsilon=params.bn_epsilon,
+        name=name_prefix+'/bn')(x)
+    # x = params.act_fn(x)
+    x = params.act_fn(name=name_prefix+'/activation')(x)
 
-    x = keras.layers.GlobalAveragePooling2D()(x)
-    x = keras.layers.Dropout(rate=params.dropout_rate)(x)
+    x = keras.layers.GlobalAveragePooling2D(name=name_prefix+'/GAP')(x)
+    x = keras.layers.Dropout(
+        rate=params.dropout_rate,
+        name=name_prefix+'/dropout')(x)
     x = keras.layers.Dense(
         units=num_classes,
-        kernel_initializer=DENSE_INIT)(x)
+        kernel_initializer=DENSE_INIT,
+        name=name_prefix+'/dense')(x)
 
     return x
 
 
 def build_effnet(params: EffnetAllParams,
+                 feature_only: bool,
                  name: str = None):
     round_filters_partial = partial(round_filters,
                                     width_coefficient=params.width_coefficient,
@@ -246,14 +276,14 @@ def build_effnet(params: EffnetAllParams,
     x = keras.layers.Input(shape=(*params.input_size, 3))
     inputs = x
 
-    x = build_stem(x, params, blockargs_list[0].filters_in)
+    x = build_stem(x, params, blockargs_list[0].filters_in, 'stem')
 
     feature_list = list()
     total_blocks = sum(args.repeat for args in blockargs_list)
     block_cnt = count(0)
     survival_prob = params.survival_prob
     depth_drop_rate_unit = (1 - survival_prob) / total_blocks
-    for args in blockargs_list:
+    for idx_args, args in enumerate(blockargs_list):
         for idx in range(args.repeat):
             block_no = next(block_cnt)
             if params.survival_prob:
@@ -267,18 +297,20 @@ def build_effnet(params: EffnetAllParams,
                 expand_ratio=args.expand_ratio,
                 se_ratio=args.se_ratio,
                 survival_prob=survival_prob,
-                params=params
+                params=params,
+                name_prefix='block_{}_{}'.format(idx_args, idx)
             )
             if idx == 0:
                 args = replace(args,
                                strides=1,
                                filters_in=args.filters_out)
-        # if (block_no == total_blocks - 1) or (blockargs_list[idx+1].strides > 1):
-        #     feature_list.append(x)
+        if (block_no == total_blocks - 1) or (blockargs_list[idx_args+1].strides > 1):
+            feature_list.append(x)
 
-    x = build_head(x, params, round_filters_partial(1280))
+    if feature_only:
+        model = keras.Model(inputs=inputs, outputs=feature_list, name=name)
+    else:
+        x = build_head(x, params, round_filters_partial(1280), name_prefix='head')
+        model = keras.Model(inputs=inputs, outputs=x, name=name)
 
-    model = keras.Model(inputs=inputs, outputs=x)
-    model.summary()
-
-    model.load_weights('./efficientnet-b0_weights_tf_dim_ordering_tf_kernels_autoaugment.h5',)
+    return model
