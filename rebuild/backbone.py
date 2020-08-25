@@ -118,7 +118,6 @@ def build_se(x,
         use_bias=True,
         kernel_initializer=CONV_INIT,
         name=name_prefix+'/se/reduce')(x)
-    # x = keras.activations.relu(x)
     x = keras.layers.ReLU(name=name_prefix+'/se/relu')(x)
 
     x = keras.layers.Conv2D(
@@ -129,7 +128,6 @@ def build_se(x,
         use_bias=True,
         kernel_initializer=CONV_INIT,
         name=name_prefix+'/se/expand')(x)
-    # x = keras.activations.sigmoid(x)
     x = keras.layers.Activation('sigmoid', name=name_prefix+'/se/sigmoid')(x)
 
     return x * inputs
@@ -151,7 +149,6 @@ def build_stem(x,
         momentum=params.bn_momentum,
         epsilon=params.bn_epsilon,
         name=name_prefix+'/bn')(x)
-    # x = params.act_fn(x)
     x = params.act_fn(name=name_prefix+'/activation')(x)
 
     return x
@@ -182,7 +179,6 @@ def build_mbconv_block(x,
             use_bias=False,
             kernel_initializer=CONV_INIT,
             name=name_prefix+'/conv_expand')(x)
-        # x = params.act_fn(batch_norm(name=name_prefix+'/bn_expand')(x))
         x = batch_norm(name=name_prefix+'/bn_expand')(x)
         x = params.act_fn(name=name_prefix+'/activation_expand')(x)
 
@@ -193,7 +189,6 @@ def build_mbconv_block(x,
         use_bias=False,
         depthwise_initializer=CONV_INIT,
         name=name_prefix+'/conv_dw')(x)
-    # x = params.act_fn(batch_norm(name=name_prefix+'/bn_dw')(x))
     x = batch_norm(name=name_prefix+'/bn_dw')(x)
     x = params.act_fn(name=name_prefix+'/activation_dw')(x)
 
@@ -211,7 +206,6 @@ def build_mbconv_block(x,
         use_bias=False,
         kernel_initializer=CONV_INIT,
         name=name_prefix+'/conv_proj')(x)
-    # x = params.act_fn(batch_norm(name=name_prefix+'/bn_proj')(x))
     x = batch_norm(name=name_prefix+'/bn_proj')(x)
     x = params.act_fn(name=name_prefix+'/activation_proj')(x)
 
@@ -241,7 +235,6 @@ def build_head(x,
         momentum=params.bn_momentum,
         epsilon=params.bn_epsilon,
         name=name_prefix+'/bn')(x)
-    # x = params.act_fn(x)
     x = params.act_fn(name=name_prefix+'/activation')(x)
 
     x = keras.layers.GlobalAveragePooling2D(name=name_prefix+'/GAP')(x)
