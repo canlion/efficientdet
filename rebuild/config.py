@@ -43,6 +43,8 @@ def get_default_config():
     c.min_level = 3
     c.max_level = 7
 
+    c.fpn_ch = 64
+
     c.anchor_size_scale = 4
     c.anchor_ratios = [(1., 1.), (1.4, .7), (.7, 1.4)]
     c.anchor_scales = [2**(0/3), 2**(1/3), 2**(2/3)]
