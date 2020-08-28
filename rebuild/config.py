@@ -34,8 +34,7 @@ class Config:
 
 def get_default_config():
     c = Config()
-
-    c.input_size = (512, 512)
+    c.act_fn = keras.activations.swish
 
     c.backbone_name = 'efficientnet-b0'
     c.backbone_config = {}
@@ -44,6 +43,11 @@ def get_default_config():
     c.max_level = 7
 
     c.fpn_ch = 64
+    c.fpn_repeat = 3
+
+    c.predictor_width = 64
+    c.predictor_repeat = 3
+    c.num_classes = 20
 
     c.anchor_size_scale = 4
     c.anchor_ratios = [(1., 1.), (1.4, .7), (.7, 1.4)]
