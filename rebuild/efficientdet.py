@@ -54,7 +54,6 @@ class ResampleOp(keras.layers.Layer):
                     size=(target_h, target_w),
                     method='nearest')
             # else keep
-
         return inputs
 
 
