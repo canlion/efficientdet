@@ -11,26 +11,26 @@ from anchors import Anchor
 
 
 VOC_MAP = {
-    'aeroplane': 0,
-    'bicycle': 1,
-    'bird': 2,
-    'boat': 3,
-    'bottle': 4,
-    'bus': 5,
-    'car': 6,
-    'cat': 7,
-    'chair': 8,
-    'cow': 9,
-    'diningtable': 10,
-    'dog': 11,
-    'horse': 12,
-    'motorbike': 13,
-    'person': 14,
-    'pottedplant': 15,
-    'sheep': 16,
-    'sofa': 17,
-    'train': 18,
-    'tvmonitor': 19
+    'aeroplane': 1,
+    'bicycle': 2,
+    'bird': 3,
+    'boat': 4,
+    'bottle': 5,
+    'bus': 6,
+    'car': 7,
+    'cat': 8,
+    'chair': 9,
+    'cow': 10,
+    'diningtable': 11,
+    'dog': 12,
+    'horse': 13,
+    'motorbike': 14,
+    'person': 15,
+    'pottedplant': 16,
+    'sheep': 17,
+    'sofa': 18,
+    'train': 19,
+    'tvmonitor': 20,
 }
 
 
@@ -40,7 +40,6 @@ class VOCDataset:
                  version_set_pairs: List[List[str]],
                  preprocessing_unit: Callable = None,
                  image_extension: str = '.jpg',
-                 batch_size: int = 8,
                  drop_remainder: bool = True,
                  skip_difficult: bool = False,
                  skip_truncated: bool = False,
@@ -55,94 +54,100 @@ class VOCDataset:
         if self.image_extension not in ['.jpg', '.jpeg', '.png']:
             raise ValueError('image extension must be either .jpg, .jpeg, .png : {}'.format(self.image_extension))
         self.preprocessing_unit = preprocessing_unit
-        self.batch_size = batch_size
         self.shuffle = shuffle
         self.drop_remainder = drop_remainder
         self.skip_difficult = skip_difficult
         self.skip_truncated = skip_truncated
         self.data_shuffle = data_shuffle
+        self.indices = list(range(len(self.images)))
 
     def __len__(self):
-        ceil_or_floor = floor if self.drop_remainder else ceil
-        return int(ceil_or_floor(len(self.images) / self.batch_size))
-
-    @property
-    def size(self):
         return len(self.images)
 
-    def batch_path_generator(self):
+    def data_pair_generator(self):
         if self.data_shuffle:
-            shuffle(self.images)
-        for index in range(len(self)):
-            batch_path = self.images[index * self.batch_size: (index+1) * self.batch_size]
-            if len(batch_path) < self.batch_size and not self.drop_remainder:
-                batch_path.extend(self.images[:self.batch_size-len(batch_path)])
-            yield batch_path
+            shuffle(self.indices)
+        for idx in self.indices:
+            yield idx
 
-    def load_images(self, batch_path):
+    def load_image(self, version, name):
         img_path_format = os.path.join(self.data_dir, 'VOC{}', 'JPEGImages', '{}'+self.image_extension)
-        images = [cv2.imread(img_path_format.format(version, name)) for version, name in batch_path]
-        images = list(map(partial(cv2.cvtColor, code=cv2.COLOR_BGR2RGB), images))
-        return images
+        image = cv2.imread(img_path_format.format(version, name))
+        image = cv2.cvtColor(image, code=cv2.COLOR_BGR2RGB)
+        return image
 
-    def load_annotations(self, batch_path):
+    def load_annotation(self, version, name):
         ann_path_format = os.path.join(self.data_dir, 'VOC{}', 'Annotations', '{}.xml')
-        labels, boxes = [], []
-        for version, name in batch_path:
-            ann_path = ann_path_format.format(version, name)
-            label, box = self.parse_annotations(ann_path)
-            labels.append(label)
-            boxes.append(boxes)
+        ann_path = ann_path_format.format(version, name)
+        category, box = self.parse_annotation(ann_path)
+        return category, box
 
-        return labels, boxes
-
-    def parse_annotations(self, xml_path):
+    def parse_annotation(self, xml_path):
         ann_root = tree.parse(xml_path).getroot()
-        labels, boxes = [], []
+        category, boxes = [], []
         for obj in ann_root.iter('object'):
             if self.skip_truncated and int(obj.findtext('truncated')):
                 continue
             if self.skip_difficult and int(obj.findtext('difficult')):
                 continue
-            labels.append(VOC_MAP[obj.findtext('name')])
+            category.append(VOC_MAP[obj.findtext('name')])
             box = obj.find('bndbox')
-            box = [int(box.findtext(xy))-1 for xy in ['xmin', 'ymin', 'xmax', 'ymax']]
+            box = [int(box.findtext(xy)) for xy in ['xmin', 'ymin', 'xmax', 'ymax']]
             boxes.append(box)
 
-        return np.array(labels), np.array(boxes)
+        return np.array(category), np.array(boxes)
 
-    def load_and_preprocessing(self, batch_path):
-        images = self.load_images(batch_path)
-        labels, boxes = self.load_annotations(batch_path)
+    def load_and_preprocessing(self, idx):
+        version, name = self.images[idx]
+        image = self.load_image(version, name)
+        category, box = self.load_annotation(version, name)
 
-        images_prep, labels_prep, boxes_prep = [], [], []
-        for img, label, box in zip(images, labels, boxes):
-            preprocessed = self.preprocessing_unit(image=img, bboxes=box, labels=label)
-            images_prep.append(preprocessed['images'])
-            labels_prep.append(preprocessed['labels'])
-            boxes_prep.append(preprocessed['bboxes'])
+        if self.preprocessing_unit is None:
+            return image, category, box
 
-        images_batch = np.stack(images_prep, axis=0).astype(np.int32)
-        labels_batch, boxes_batch = self.collate(labels_prep, boxes_prep)
+        preprocessed = self.preprocessing_unit(image=image, bboxes=box, labels=category)
 
-        return (tf.convert_to_tensor(images_batch, tf.int32),
-                tf.convert_to_tensor(labels_batch, tf.int32),
-                tf.convert_to_tensor(boxes_batch, tf.int32))
+        return (tf.convert_to_tensor(preprocessed['image'], tf.int32),
+                tf.convert_to_tensor(preprocessed['labels'], tf.int32),
+                tf.convert_to_tensor(preprocessed['bboxes'], tf.int32))
 
-    def collate(self, labels, boxes):
-        """Make labels, boxes into one array each."""
-        max_num = max(len(label) for label in labels)
+    def get_dataset(self):
+        ds = tf.data.Dataset.from_generator(generator=self.data_pair_generator,
+                                            output_types=tf.int32)
+        ds = ds.map(lambda idx: tf.py_function(func=self.load_and_preprocessing,
+                                               inp=[idx],
+                                               Tout=[tf.int32, tf.int32, tf.int32]),
+                    num_parallel_calls=tf.data.experimental.AUTOTUNE)
+        return ds
 
-        if max_num > 0:
-            frame_boxes = np.zeros((self.batch_size, max_num, 4))
-            frame_labels = np.ones((self.batch_size, max_num)) * -1
 
-            for i, (label, box) in enumerate(zip(labels, boxes)):
-                if len(label) > 0:
-                    frame_labels[i, :len(label)] = label
-                    frame_boxes[i, :len(label), :] = box
-        else:
-            frame_boxes = np.zeros((self.batch_size, 1, 4))
-            frame_labels = np.ones((self.batch_size, 1)) * -1
+def box_anchor_matching(iou):
+    # iou : (N_gt, N_anchor)
+    max_iou = tf.reduce_max(iou, axis=0)  # (N_anchor,)
+    max_iou_box_idx = tf.argmax(iou, axis=0)
+    iou_pos_indicator = tf.cast(max_iou >= .5, tf.int32)
 
-        return frame_labels, frame_boxes
+    # shape : (N_anchor,) -> box index if anchor's maximum iou >= 0.5 else -1 (negative)
+    match = max_iou_box_idx * iou_pos_indicator + (1-iou_pos_indicator) * -1
+
+    # TODO : force matching not-matched ground truth box
+
+    return match
+
+
+def assign_value(value, idx, negative_value):
+    value_stack = tf.concat([tf.stack([negative_value]), value], axis=0)
+    assigned_value = tf.gather(value_stack, idx+1)
+    return assigned_value
+
+
+if __name__ == '__main__':
+    voc = VOCDataset(data_dir='/mnt/hdd/jinwoo/sandbox_datasets/voc_download',
+                     version_set_pairs=[[2012, 'train']],
+                     preprocessing_unit=None)
+    ds = voc.get_dataset()
+
+    for img, category, box in ds.take(5):
+        print(img.shape)
+        print(category)
+        print(box)
