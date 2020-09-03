@@ -1,5 +1,6 @@
 from typing import Tuple
 from math import ceil
+import tensorflow as tf
 
 
 def get_feature_sizes(img_size: Tuple[int, int],
@@ -15,5 +16,31 @@ def get_feature_sizes(img_size: Tuple[int, int],
     return feature_size_list[min_level: max_level+1]
 
 
-if __name__ == '__main__':
-    print(get_feature_sizes((500, 500), 3, 7))
+def ltrb2xywh(arr):
+    arr = tf.cast(arr, tf.float32)
+    wh = arr[..., 2:] - arr[..., :2]
+    xy = (arr[..., :2] + arr[..., 2:]) / 2
+    return tf.concat([xy, wh], axis=-1)
+
+
+def IOU(box, anchor):
+    # box : (N_gt, 4), anchor : (N_anchor, 4)
+    box_expand = tf.expand_dims(box, -2)  # (N_gt, 1, 4)
+    anchor_expand = tf.expand_dims(anchor, -3)  # (1, N_anchor, 4)
+
+    box_lt = box_expand[..., :2]  # (N_gt, 1, 2)
+    box_rb = box_expand[..., 2:]
+    anchor_lt = anchor_expand[..., :2]  # (1, N_anchor, 2)
+    anchor_rb = anchor_expand[..., 2:]
+
+    inter_lt = tf.maximum(box_lt, anchor_lt)  # (N_gt, N_anchor, 2)
+    inter_rb = tf.minimum(box_rb, anchor_rb)
+
+    inter_wh = tf.maximum(inter_rb - inter_lt + 1, 0)
+    intersection = tf.reduce_prod(inter_wh, axis=-1)  # (N_gt, N_anchor)
+
+    union = tf.reduce_prod(box_rb - box_lt + 1, axis=-1) \
+        + tf.reduce_prod(anchor_rb - anchor_lt + 1, axis=-1) \
+        - intersection
+
+    return tf.clip_by_value(intersection / union, 0., 1.)  # (N_gt, N_anchor)
