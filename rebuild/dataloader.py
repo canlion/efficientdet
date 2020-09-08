@@ -38,12 +38,19 @@ class VOCDataset:
     def __init__(self,
                  data_dir: str,
                  version_set_pairs: List[List[str]],
-                 preprocessing_unit: Callable = None,
                  image_extension: str = '.jpg',
-                 drop_remainder: bool = True,
                  skip_difficult: bool = False,
                  skip_truncated: bool = False,
                  data_shuffle: bool = True):
+        """construct voc dataset
+
+        :param data_dir: VOC data directory
+        :param version_set_pairs: data version & set pair ex) [[2007, 'train'], [2012, ['valid']]
+        :param image_extension: image extension. jpg / jpeg / png
+        :param skip_difficult: skip difficult labeled data
+        :param skip_truncated: skip truncated labeled data
+        :param data_shuffle: shuffle data
+        """
         self.data_dir = data_dir
         self.images = list()
         for version, set_ in version_set_pairs:
@@ -53,9 +60,7 @@ class VOCDataset:
         self.image_extension = image_extension if image_extension.startswith('.') else '.' + image_extension
         if self.image_extension not in ['.jpg', '.jpeg', '.png']:
             raise ValueError('image extension must be either .jpg, .jpeg, .png : {}'.format(self.image_extension))
-        self.preprocessing_unit = preprocessing_unit
         self.shuffle = shuffle
-        self.drop_remainder = drop_remainder
         self.skip_difficult = skip_difficult
         self.skip_truncated = skip_truncated
         self.data_shuffle = data_shuffle
@@ -64,7 +69,7 @@ class VOCDataset:
     def __len__(self):
         return len(self.images)
 
-    def data_pair_generator(self):
+    def data_idx_generator(self):
         if self.data_shuffle:
             shuffle(self.indices)
         for idx in self.indices:
@@ -97,24 +102,17 @@ class VOCDataset:
 
         return np.array(category), np.array(boxes)
 
-    def load_and_preprocessing(self, idx):
+    def load_data(self, idx):
         version, name = self.images[idx]
         image = self.load_image(version, name)
         category, box = self.load_annotation(version, name)
 
-        if self.preprocessing_unit is None:
-            return image, category, box
-
-        preprocessed = self.preprocessing_unit(image=image, bboxes=box, labels=category)
-
-        return (tf.convert_to_tensor(preprocessed['image'], tf.int32),
-                tf.convert_to_tensor(preprocessed['labels'], tf.int32),
-                tf.convert_to_tensor(preprocessed['bboxes'], tf.int32))
+        return np.array(image), np.array(category), np.array(box)
 
     def get_dataset(self):
-        ds = tf.data.Dataset.from_generator(generator=self.data_pair_generator,
+        ds = tf.data.Dataset.from_generator(generator=self.data_idx_generator,
                                             output_types=tf.int32)
-        ds = ds.map(lambda idx: tf.py_function(func=self.load_and_preprocessing,
+        ds = ds.map(lambda idx: tf.py_function(func=self.load_data,
                                                inp=[idx],
                                                Tout=[tf.int32, tf.int32, tf.int32]),
                     num_parallel_calls=tf.data.experimental.AUTOTUNE)
@@ -143,8 +141,7 @@ def assign_value(value, idx, negative_value):
 
 if __name__ == '__main__':
     voc = VOCDataset(data_dir='/mnt/hdd/jinwoo/sandbox_datasets/voc_download',
-                     version_set_pairs=[[2012, 'train']],
-                     preprocessing_unit=None)
+                     version_set_pairs=[[2012, 'train']])
     ds = voc.get_dataset()
 
     for img, category, box in ds.take(5):
