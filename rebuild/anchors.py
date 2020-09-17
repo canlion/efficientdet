@@ -6,18 +6,18 @@ from utils import get_feature_sizes
 
 
 class Anchor:
-    # def __init__(self, config):
-    #     self.input_size = config.input_size
-    #     self.anchor_size_scale = config.anchor_size_scale
-    #     self.anchor_ratios = config.anchor_ratios
-    #     self.anchor_scales = config.anchor_scales
-    #     self.feature_sizes = get_feature_sizes(self.input_size, config.min_level, config.max_level)
-    def __init__(self, input_size, anchor_size_scale, anchor_ratios, anchor_scales, min_level, max_level):
-        self.input_size = input_size
-        self.anchor_size_scale = anchor_size_scale
-        self.anchor_ratios = anchor_ratios
-        self.anchor_scales = anchor_scales
-        self.feature_sizes = get_feature_sizes(self.input_size, min_level, max_level)
+    def __init__(self, config):
+        self.input_size = config.input_size
+        self.anchor_size_scale = config.anchor_size_scale
+        self.anchor_ratios = config.anchor_ratios
+        self.anchor_scales = config.anchor_scales
+        self.feature_sizes = get_feature_sizes(self.input_size, config.min_level, config.max_level)
+    # def __init__(self, input_size, anchor_size_scale, anchor_ratios, anchor_scales, min_level, max_level):
+    #     self.input_size = input_size
+    #     self.anchor_size_scale = anchor_size_scale
+    #     self.anchor_ratios = anchor_ratios
+    #     self.anchor_scales = anchor_scales
+    #     self.feature_sizes = get_feature_sizes(self.input_size, min_level, max_level)
 
     def generate_anchor(self):
         input_h, input_w = self.input_size

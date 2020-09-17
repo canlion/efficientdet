@@ -108,6 +108,7 @@ class VOCDataset:
         version, name = self.images[idx]
         image = self.load_image(version, name)
         category, box = self.load_annotation(version, name)
+        image = tf.convert_to_tensor(image)
 
         return np.array(image), np.array(category), np.array(box)
 
@@ -115,7 +116,7 @@ class VOCDataset:
         ds = tf.data.Dataset.from_generator(generator=self.data_idx_generator,
                                             output_types=tf.int32)
         if self.data_shuffle:
-            ds = ds.shuffle(64)
+            ds = ds.shuffle(512)
         ds = ds.map(lambda idx: tf.py_function(func=self.load_data,
                                                inp=[idx],
                                                Tout=[tf.int32, tf.int32, tf.int32]),
@@ -126,26 +127,29 @@ class VOCDataset:
 class Preprocessor:
     def __init__(self,
                  output_size: Tuple[int, int],
-                 is_training: bool = True,
+                 default_aug: bool = True,
                  rescale_min: float = None,
                  rescale_max: float = None,
                  augmentation_func: Callable = None):
         self.output_size = output_size
-        self.is_training = is_training
+        self.default_aug = default_aug
         self.augmentation_func = augmentation_func
         self.rescale_min = rescale_min
         self.rescale_max = rescale_max
 
         logging.info('Preprocessor| output size : {}'.format(output_size))
-        logging.info('Preprocessor| training : {}'.format(is_training))
+        logging.info('Preprocessor| training : {}'.format(default_aug))
         logging.info('Preprocessor| rescale factor : {} / {}'.format(rescale_min, rescale_max))
 
-    def resize_crop(self, img, box, category):
-        H, W = tf.cast(tf.shape(img)[:2], tf.float32)  # f32
-        target_H, target_W = tf.cast(self.output_size, tf.float32)  # f32
+    def resize_crop(self, img, category, box):
+        img.set_shape(tf.TensorShape([None, None, None]))
+        H = tf.cast(tf.shape(img)[0], tf.float32)  # f32
+        W = tf.cast(tf.shape(img)[1], tf.float32)  # f32
+        target_H = tf.cast(self.output_size[0], tf.float32)  # f32
+        target_W = tf.cast(self.output_size[1], tf.float32)  # f32
 
         # get accurate factor
-        if self.is_training:
+        if self.default_aug:
             factor = tf.random.uniform((), self.rescale_min, self.rescale_max, dtype=tf.float32)  # f32
             scaled_H = factor * tf.cast(target_H, tf.float32)  # f32
             scaled_W = factor * tf.cast(target_W, tf.float32)  # f32
@@ -155,23 +159,23 @@ class Preprocessor:
             scaled_H, scaled_W = target_H, target_W  # f32
 
         factor = tf.minimum(scaled_H / H, scaled_W / W)  # f32
-        tf.print(factor)
         # get new, scaled size
         new_H, new_W = H * factor, W * factor  # f32
-        tf.print(new_H, new_W)
+        # tf.print(new_H, new_W)
 
         # get offset if new size is larger than output_size. we will crop image.
-        if self.is_training:
+        if self.default_aug:
             offset_range_y = tf.maximum(0., new_H-target_H)  # f32
             offset_range_x = tf.maximum(0., new_W-target_W)  # f32
             offset_y = tf.cast(offset_range_y * tf.random.uniform((), 0., 1.), tf.int32)  # i32
             offset_x = tf.cast(offset_range_x * tf.random.uniform((), 0., 1.), tf.int32)  # i32
         else:
             offset_y, offset_x = 0, 0  # i32? 64?
+
         img = tf.image.resize(img, (new_H, new_W))
+        img = tf.squeeze(img)
         img = tf.cast(img, tf.int32)
         img = img[offset_y:offset_y+self.output_size[0], offset_x:offset_x+self.output_size[1]]
-        tf.print(tf.shape(img))
         img = tf.image.pad_to_bounding_box(img, 0, 0, self.output_size[0], self.output_size[1])
 
         box_offset = tf.convert_to_tensor([[offset_x, offset_y, offset_x, offset_y]])
@@ -179,13 +183,11 @@ class Preprocessor:
         box = tf.cast(box * factor, tf.int32)
         box = box - box_offset
 
-        valid_range_x = self.output_size[1]-1 if target_W < new_W else new_W-1
-        valid_range_y = self.output_size[0]-1 if target_H < new_H else new_H-1
+        valid_range_x = self.output_size[1]-1 if target_W < new_W else tf.cast(new_W, tf.int32)-1
+        valid_range_y = self.output_size[0]-1 if target_H < new_H else tf.cast(new_H, tf.int32)-1
         box = self.clip_box(box, valid_range_x, valid_range_y)
 
-        box_indicator = tf.where(
-            tf.reduce_prod(box[..., 2:] - box[..., :2], axis=1) > 0
-        )
+        box_indicator = tf.where(tf.reduce_prod(box[..., 2:] - box[..., :2], axis=1) > 0)
         box = tf.gather_nd(box, box_indicator)
         box = tf.cast(box, tf.int32)
         category = tf.gather_nd(category, box_indicator)
@@ -200,32 +202,58 @@ class Preprocessor:
 
 
 class Labeler:
-    def __init__(self, anchor_args):
-        self.anchor = Anchor(**anchor_args).generate_anchor()
+    def __init__(self, config):
+        self.anchor = Anchor(config).generate_anchor()
 
     def anchor_box_pairing(self, box, category):
+        if tf.equal(tf.shape(box)[0], 0):
+            len_anchor = tf.shape(self.anchor)[0]
+            return tf.zeros(shape=(len_anchor,), dtype=tf.int32), tf.zeros_like(self.anchor)
         iou = IOU(box, self.anchor)
         iou_max = tf.reduce_max(iou, axis=-1)
         iou_argmax = tf.argmax(iou, axis=-1)
 
         box_indicator = tf.where(iou_max >= .5, iou_argmax, -1)
 
-        box_concat = tf.concat([tf.zeros((1, 4)), box], axis=0)
+        box_concat = tf.concat([tf.zeros((1, 4), dtype=tf.int32), box], axis=0)
         category_concat = tf.concat([tf.stack([0]), category], axis=-1)
 
         anchor_box_pair = tf.gather(box_concat, box_indicator+1)
         anchor_category_pair = tf.gather(category_concat, box_indicator+1)
 
         reg_target = self.encoding_delta(self.anchor, anchor_box_pair, box_indicator)
-        return reg_target, anchor_category_pair
+        return anchor_category_pair, reg_target
 
     def encoding_delta(self, anchor, box, indicator):
+        box = tf.cast(box, tf.float32)
         anchor_xywh, box_xywh = ltrb2xywh(anchor), ltrb2xywh(box)
         xy_encoding = (box_xywh[..., :2] - anchor_xywh[..., :2]) / anchor_xywh[..., 2:]
         wh_encoding = tf.math.log(box_xywh[..., 2:] / anchor_xywh[..., 2:])
         delta = tf.concat([xy_encoding, wh_encoding], axis=-1)
-        delta = tf.where(indicator > -1, delta, box)
+        delta = tf.where(indicator[..., tf.newaxis] > -1, delta, box)
         return delta
+
+
+def get_dataset(config, mode):
+    assert mode in ['train', 'valid']
+    ds_config = config.dataset_config[mode]
+    ds = VOCDataset(data_dir=ds_config['data_dir'],
+                    version_set_pairs=ds_config['version_set_pair'],
+                    data_shuffle=ds_config['data_shuffle']).get_dataset()
+
+    preprocessor = Preprocessor(output_size=config.input_size,
+                                default_aug=ds_config['default_aug'],
+                                rescale_min=ds_config['rescale_min'],
+                                rescale_max=ds_config['rescale_max'])
+    ds = ds.map(preprocessor.resize_crop, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+
+    labeler = Labeler(config)
+    map_fn = lambda img, category, box: (img, *labeler.anchor_box_pairing(box, category))
+    ds = ds.map(map_fn, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+    ds = ds.batch(ds_config['batch_size'], drop_remainder=ds_config['default_aug'])
+    return ds
+
+
 
 
 if __name__ == '__main__':

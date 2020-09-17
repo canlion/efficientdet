@@ -25,6 +25,8 @@ def ltrb2xywh(arr):
 
 def IOU(box, anchor):
     # box : (N_gt, 4), anchor : (N_anchor, 4)
+    box = tf.cast(box, tf.float32)
+    anchor = tf.cast(anchor, tf.float32)
     box_expand = tf.expand_dims(box, 0)  # (1, N_gt, 4)
     anchor_expand = tf.expand_dims(anchor, 1)  # (N_anchor, 1, 4)
 
