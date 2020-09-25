@@ -33,7 +33,7 @@ class EffnetParams:
 
 @dataclass
 class EffnetHParams:
-    input_size: Tuple[int, int] = (512, 512)
+    input_size: Tuple[int, int] = (224, 224)
     bn_momentum: float = .99
     bn_epsilon: float = 1e-3
     depth_divisor: int = 8
@@ -117,8 +117,9 @@ def build_se(x,
         padding='same',
         use_bias=True,
         kernel_initializer=CONV_INIT,
-        name=name_prefix+'/se/reduce')(x)
-    x = keras.layers.ReLU(name=name_prefix+'/se/relu')(x)
+        name=name_prefix+'_se_reduce')(x)
+    # x = keras.layers.ReLU(name=name_prefix+'_se_relu')(x)
+    x = keras.layers.Activation(tf.keras.activations.swish)(x)
 
     x = keras.layers.Conv2D(
         filters=filters_expand,
@@ -127,8 +128,8 @@ def build_se(x,
         padding='same',
         use_bias=True,
         kernel_initializer=CONV_INIT,
-        name=name_prefix+'/se/expand')(x)
-    x = keras.layers.Activation('sigmoid', name=name_prefix+'/se/sigmoid')(x)
+        name=name_prefix+'_se_expand')(x)
+    x = keras.layers.Activation('sigmoid', name=name_prefix+'_se_sigmoid')(x)
 
     return x * inputs
 
@@ -144,12 +145,12 @@ def build_stem(x,
         padding='same',
         use_bias=False,
         kernel_initializer=CONV_INIT,
-        name=name_prefix+'/conv')(x)
+        name=name_prefix+'_conv')(x)
     x = keras.layers.experimental.SyncBatchNormalization(
         momentum=params.bn_momentum,
         epsilon=params.bn_epsilon,
-        name=name_prefix+'/bn')(x)
-    x = params.act_fn(name=name_prefix+'/activation')(x)
+        name=name_prefix+'_bn')(x)
+    x = params.act_fn(name=name_prefix+'_activation')(x)
 
     return x
 
@@ -178,9 +179,9 @@ def build_mbconv_block(x,
             padding='same',
             use_bias=False,
             kernel_initializer=CONV_INIT,
-            name=name_prefix+'/conv_expand')(x)
-        x = batch_norm(name=name_prefix+'/bn_expand')(x)
-        x = params.act_fn(name=name_prefix+'/activation_expand')(x)
+            name=name_prefix+'_expand_conv')(x)
+        x = batch_norm(name=name_prefix+'_expand_bn')(x)
+        x = params.act_fn(name=name_prefix+'_expand_activation')(x)
 
     x = keras.layers.DepthwiseConv2D(
         kernel_size=kernel_size,
@@ -188,9 +189,9 @@ def build_mbconv_block(x,
         padding='same',
         use_bias=False,
         depthwise_initializer=CONV_INIT,
-        name=name_prefix+'/conv_dw')(x)
-    x = batch_norm(name=name_prefix+'/bn_dw')(x)
-    x = params.act_fn(name=name_prefix+'/activation_dw')(x)
+        name=name_prefix+'_dwconv')(x)
+    x = batch_norm(name=name_prefix+'_bn')(x)
+    x = params.act_fn(name=name_prefix+'_activation')(x)
 
     filters_reduce = max(1, int(filters_in * se_ratio))
     x = build_se(x,
@@ -205,46 +206,32 @@ def build_mbconv_block(x,
         padding='same',
         use_bias=False,
         kernel_initializer=CONV_INIT,
-        name=name_prefix+'/conv_proj')(x)
-    x = batch_norm(name=name_prefix+'/bn_proj')(x)
-    x = params.act_fn(name=name_prefix+'/activation_proj')(x)
+        name=name_prefix+'_project_conv')(x)
+    x = batch_norm(name=name_prefix+'_project_bn')(x)
+    # x = params.act_fn(name=name_prefix+'_project_activation')(x)
 
     if (strides == 1) and (filters_in == filters_out):
         if survival_prob:
             x = keras.layers.Dropout(rate=1-survival_prob,
                                      noise_shape=[None, 1, 1, 1],
-                                     name=name_prefix+'/depth_drop')(x)
-        x = tf.add(x, inputs, name=name_prefix+'/identity_skip')
+                                     name=name_prefix+'_depth_drop')(x)
+        x = tf.add(x, inputs, name=name_prefix+'_identity_skip')
     return x
 
 
 def build_head(x,
                params: EffnetAllParams,
-               output_ch: int,
                num_classes: int = 1000,
                name_prefix: str = None):
-    x = keras.layers.Conv2D(
-        filters=output_ch,
-        kernel_size=1,
-        strides=1,
-        padding='same',
-        use_bias=False,
-        kernel_initializer=CONV_INIT,
-        name=name_prefix+'/conv')(x)
-    x = keras.layers.experimental.SyncBatchNormalization(
-        momentum=params.bn_momentum,
-        epsilon=params.bn_epsilon,
-        name=name_prefix+'/bn')(x)
-    x = params.act_fn(name=name_prefix+'/activation')(x)
-
-    x = keras.layers.GlobalAveragePooling2D(name=name_prefix+'/GAP')(x)
+    x = keras.layers.GlobalAveragePooling2D(name=name_prefix+'avg_pool')(x)
     x = keras.layers.Dropout(
         rate=params.dropout_rate,
-        name=name_prefix+'/dropout')(x)
+        name=name_prefix+'top_dropout')(x)
     x = keras.layers.Dense(
         units=num_classes,
+        activation='softmax',
         kernel_initializer=DENSE_INIT,
-        name=name_prefix+'/dense')(x)
+        name=name_prefix+'probs')(x)
 
     return x
 
@@ -291,7 +278,7 @@ def build_effnet(params: EffnetAllParams,
                 se_ratio=args.se_ratio,
                 survival_prob=survival_prob,
                 params=params,
-                name_prefix='block_{}_{}'.format(idx_args, idx)
+                name_prefix='block{}{}'.format(idx_args+1, chr(idx+97))
             )
             if idx == 0:
                 args = replace(args,
@@ -303,7 +290,20 @@ def build_effnet(params: EffnetAllParams,
     if feature_only:
         model = keras.Model(inputs=inputs, outputs=feature_list, name=name)
     else:
-        x = build_head(x, params, round_filters_partial(1280), name_prefix='head')
+        x = keras.layers.Conv2D(
+            filters=round_filters_partial(1280),
+            kernel_size=1,
+            strides=1,
+            padding='same',
+            use_bias=False,
+            kernel_initializer=CONV_INIT,
+            name='top_conv')(x)
+        x = keras.layers.experimental.SyncBatchNormalization(
+            momentum=params.bn_momentum,
+            epsilon=params.bn_epsilon,
+            name='top_bn')(x)
+        x = params.act_fn(name='top_activation')(x)
+        x = build_head(x, params, name_prefix='')
         model = keras.Model(inputs=inputs, outputs=x, name=name)
 
     return model

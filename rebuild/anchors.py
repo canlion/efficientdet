@@ -7,22 +7,22 @@ from utils import get_feature_sizes
 
 class Anchor:
     def __init__(self, config):
+        self.config = config
         self.input_size = config.input_size
         self.anchor_size_scale = config.anchor_size_scale
         self.anchor_ratios = config.anchor_ratios
         self.anchor_scales = config.anchor_scales
         self.feature_sizes = get_feature_sizes(self.input_size, config.min_level, config.max_level)
-    # def __init__(self, input_size, anchor_size_scale, anchor_ratios, anchor_scales, min_level, max_level):
-    #     self.input_size = input_size
-    #     self.anchor_size_scale = anchor_size_scale
-    #     self.anchor_ratios = anchor_ratios
-    #     self.anchor_scales = anchor_scales
-    #     self.feature_sizes = get_feature_sizes(self.input_size, min_level, max_level)
 
-    def generate_anchor(self):
-        input_h, input_w = self.input_size
+    def generate_anchor(self, img_size=None):
+        if img_size is not None:
+            input_h, input_w = img_size
+            feature_sizes = get_feature_sizes(img_size, self.config.min_level, self.config.max_level)
+        else:
+            input_h, input_w = self.input_size
+            feature_sizes = self.feature_sizes
         all_anchor = list()
-        for feat_h, feat_w in self.feature_sizes:
+        for feat_h, feat_w in feature_sizes:
             stride_h, stride_w = input_h/feat_h, input_w/feat_w
 
             center_x, center_y = np.meshgrid(
@@ -32,16 +32,16 @@ class Anchor:
 
             feat_anchor_list = list()
             for scale, ratio in product(self.anchor_scales, self.anchor_ratios):
-                anchor_h = self.anchor_size_scale * stride_h * (2 ** scale)
-                anchor_w = self.anchor_size_scale * stride_w * (2 ** scale)
+                anchor_h = self.anchor_size_scale * stride_h * scale
+                anchor_w = self.anchor_size_scale * stride_w * scale
                 anchor_stretch_h = anchor_h * ratio[0]
                 anchor_stretch_w = anchor_w * ratio[1]
 
                 feat_anchor = np.stack([
-                    center_y - anchor_stretch_h / 2,
                     center_x - anchor_stretch_w / 2,
-                    center_y + anchor_stretch_h / 2,
+                    center_y - anchor_stretch_h / 2,
                     center_x + anchor_stretch_w / 2,
+                    center_y + anchor_stretch_h / 2,
                 ], axis=-1)
                 feat_anchor_list.append(feat_anchor)
             feat_all_anchor = np.stack(feat_anchor_list, axis=-2).reshape(-1, 4)

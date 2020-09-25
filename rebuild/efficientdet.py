@@ -5,6 +5,7 @@ import tensorflow as tf
 import tensorflow.keras as keras
 
 from backbone import get_effnet_params, build_effnet
+import pdb
 
 
 class ResampleOp(keras.layers.Layer):
@@ -122,7 +123,7 @@ class BiFPN(keras.layers.Layer):
     def call(self, inputs, **kwargs):
         num_feats = len(inputs)
         for op_dict, resample_ops, fusion_op in zip(self.op_list, self.resample_ops, self.fusion_ops):
-            resampled_feats = list()
+            resampled_feats = []
             target_size = inputs[op_dict['level']].shape.as_list()[1:3]
             for feat_idx, resample_op in zip(op_dict['feat_idx'], resample_ops):
                 resampled_feats.append(
@@ -157,7 +158,7 @@ class BiFPNS(keras.layers.Layer):
 
         for fpn in self.fpns:
             inputs = fpn(inputs, **kwargs)
-
+        # pdb.set_trace()
         return inputs
 
 
@@ -171,6 +172,7 @@ class ClassNet(keras.layers.Layer):
                  act_fn):
         super().__init__()
         self.act_fn = act_fn
+        self.num_classes = num_classes
 
         self.conv_ops = [
             keras.layers.SeparableConv2D(
@@ -178,8 +180,8 @@ class ClassNet(keras.layers.Layer):
                 kernel_size=3,
                 strides=1,
                 padding='same',
-                depthwise_initializer=keras.initializers.VarianceScaling(),
-                pointwise_initializer=keras.initializers.VarianceScaling(),
+                depthwise_initializer=tf.initializers.VarianceScaling(),
+                pointwise_initializer=tf.initializers.VarianceScaling(),
             ) for _ in range(repeat)
         ]
 
@@ -192,17 +194,24 @@ class ClassNet(keras.layers.Layer):
             kernel_size=3,
             strides=1,
             padding='same',
-            bias_initializer=keras.initializers.Constant(-log((1-0.01)/0.01)),
+            depthwise_initializer=tf.initializers.VarianceScaling(),
+            pointwise_initializer=tf.initializers.VarianceScaling(),
+            bias_initializer=tf.constant_initializer(-log((1-0.01)/0.01)),
         )
 
     def call(self, inputs, **kwargs):
-        outputs = list()
+        # pdb.set_trace()
+        batch_size = tf.shape(inputs[0])[0]
+        outputs = []
         for feat_idx, feat in enumerate(inputs):
             for conv_op, bn_ops in zip(self.conv_ops, self.bn_ops):
                 feat = conv_op(feat)
                 feat = bn_ops[feat_idx](feat, **kwargs)
                 feat = self.act_fn(feat)
             outputs.append(self.head(feat))
+
+        outputs = [tf.reshape(output, [batch_size, -1, self.num_classes]) for output in outputs]
+        outputs = tf.concat(outputs, axis=-2)
         return outputs
 
 
@@ -241,22 +250,29 @@ class BoxNet(keras.layers.Layer):
         )
 
     def call(self, inputs, **kwargs):
-        outputs = list()
+        batch_size = tf.shape(inputs[0])[0]
+        outputs = []
         for feat_idx, feat in enumerate(inputs):
             for conv_op, bn_ops in zip(self.conv_ops, self.bn_ops):
                 feat = conv_op(feat)
                 feat = bn_ops[feat_idx](feat, **kwargs)
                 feat = self.act_fn(feat)
             outputs.append(self.head(feat))
+
+        outputs = [tf.reshape(output, [batch_size, -1, 4]) for output in outputs]
+        outputs = tf.concat(outputs, axis=-2)
         return outputs
 
 
 class EffDet(keras.Model):
     def __init__(self, config):
         super().__init__()
+        self.config = config
 
         backbone_config = get_effnet_params(config)
         self.backbone = build_effnet(backbone_config, feature_only=True, name=config.backbone_name)
+        self.backbone.load_weights('../model/efficientnet_weights/efficientnet-b0_weights_tf_dim_ordering_tf_kernels_autoaugment_notop.h5', by_name=True)
+        self.backbone.trainable = False
 
         self.fpn = BiFPNS(config)
 
@@ -272,7 +288,19 @@ class EffDet(keras.Model):
                              num_anchors=len(config.anchor_ratios)*len(config.anchor_scales),
                              act_fn=config.act_fn)
 
+        self.IMGNET_MEAN = tf.constant(value=[0.485, 0.456, 0.406], shape=[1, 1, 1, 3])
+        self.IMGNET_STD = tf.constant(value=[0.229, 0.224, 0.225], shape=[1, 1, 1, 3])
+
+    def normalize(self, img_batch):
+        img_batch = tf.cast(img_batch, tf.float32)
+        img_batch = img_batch / 255.
+        img_norm = img_batch - self.IMGNET_MEAN
+        img_norm = img_norm / self.IMGNET_STD
+        return img_norm
+
+    @tf.function
     def call(self, inputs, training=None, mask=None):
+        inputs = self.normalize(inputs)
         outputs = self.backbone(inputs, training=training)
         outputs = self.fpn(outputs, training=training)
 

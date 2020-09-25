@@ -34,7 +34,8 @@ class Config:
 
 def get_default_config():
     c = Config()
-    c.act_fn = keras.activations.swish
+
+    # dataset
     c.dataset_config = {
         'train': {
             'data_dir': '/mnt/hdd/jinwoo/sandbox_datasets/voc_download',
@@ -43,20 +44,41 @@ def get_default_config():
             'default_aug': True,
             'rescale_min': .1,
             'rescale_max': 2.,
-            'batch_size': 4,
+            'batch_size': 8,
         },
         'valid': {
             'data_dir': '/mnt/hdd/jinwoo/sandbox_datasets/voc_download',
-            'version_set_pair': [[2012, 'valid']],
+            'version_set_pair': [[2012, 'val']],
             'data_shuffle': False,
             'default_aug': False,
-            'batch_size': 4,
+            'batch_size': 16,
         },
     }
 
-    c.backbone_name = 'efficientnet-b0'
-    c.backbone_config = {}
+    # lr
+    c.lr_method = 'cosine'
+    c.lr_init = 1e-2
+    c.lr_warmup = 1e-3
+    c.epoch_warmup = 1
+    c.epoch_total = 100
 
+    # optimizer
+    c.optimizer = 'sgd'
+    c.optimizer_config = {
+        'momentum': .9,
+    }
+    c.moving_average_decay = None
+
+    # general
+    c.act_fn = keras.activations.swish
+
+    # backbone
+    c.backbone_name = 'efficientnet-b0'
+    c.backbone_config = {
+        'input_size': (512, 512)
+    }
+
+    # effdet
     c.input_size = (512, 512)
     c.min_level = 3
     c.max_level = 7
@@ -68,9 +90,14 @@ def get_default_config():
     c.predictor_repeat = 3
     c.num_classes = 20
 
+    # anchor
     c.anchor_size_scale = 4
     c.anchor_ratios = [(1., 1.), (1.4, .7), (.7, 1.4)]
     c.anchor_scales = [2**(0/3), 2**(1/3), 2**(2/3)]
+
+    # training
+    c.box_loss_w = 50.
+    c.step_per_epoch = None
 
     return c
 

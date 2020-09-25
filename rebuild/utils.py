@@ -16,11 +16,24 @@ def get_feature_sizes(img_size: Tuple[int, int],
     return feature_size_list[min_level: max_level+1]
 
 
-def ltrb2xywh(arr):
+def ltrb2xywh(arr, cast_to_int=False):
     arr = tf.cast(arr, tf.float32)
     wh = arr[..., 2:] - arr[..., :2]
     xy = (arr[..., :2] + arr[..., 2:]) / 2
-    return tf.concat([xy, wh], axis=-1)
+    xywh = tf.concat([xy, wh], axis=-1)
+    if cast_to_int:
+        xywh = tf.cast(xywh, tf.int32)
+    return xywh
+
+
+def xywh2ltrb(arr, cast_to_int=False):
+    arr = tf.cast(arr, tf.float32)
+    lt = arr[..., :2] - arr[..., 2:] // 2
+    rb = arr[..., :2] + arr[..., 2:] // 2
+    ltrb = tf.concat([lt, rb], axis=-1)
+    if cast_to_int:
+        ltrb = tf.cast(ltrb, tf.int32)
+    return ltrb
 
 
 def IOU(box, anchor):

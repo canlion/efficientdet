@@ -219,7 +219,9 @@ class Labeler:
         category_concat = tf.concat([tf.stack([0]), category], axis=-1)
 
         anchor_box_pair = tf.gather(box_concat, box_indicator+1)
-        anchor_category_pair = tf.gather(category_concat, box_indicator+1)
+        # background : 0 -> -1
+        # tf.one_hot convert -1 to zero vector. : tf.one_hot([-1,], 3) -> [[0, 0, 0,],]
+        anchor_category_pair = tf.gather(category_concat, box_indicator+1) - 1
 
         reg_target = self.encoding_delta(self.anchor, anchor_box_pair, box_indicator)
         return anchor_category_pair, reg_target
@@ -230,30 +232,30 @@ class Labeler:
         xy_encoding = (box_xywh[..., :2] - anchor_xywh[..., :2]) / anchor_xywh[..., 2:]
         wh_encoding = tf.math.log(box_xywh[..., 2:] / anchor_xywh[..., 2:])
         delta = tf.concat([xy_encoding, wh_encoding], axis=-1)
-        delta = tf.where(indicator[..., tf.newaxis] > -1, delta, box)
+        delta = tf.where(indicator[..., tf.newaxis] > -1, delta, tf.zeros((1, 4)))
         return delta
 
 
 def get_dataset(config, mode):
     assert mode in ['train', 'valid']
     ds_config = config.dataset_config[mode]
-    ds = VOCDataset(data_dir=ds_config['data_dir'],
-                    version_set_pairs=ds_config['version_set_pair'],
-                    data_shuffle=ds_config['data_shuffle']).get_dataset()
+    ds_cls = VOCDataset(data_dir=ds_config['data_dir'],
+                        version_set_pairs=ds_config['version_set_pair'],
+                        data_shuffle=ds_config['data_shuffle'])
+    len_ds = len(ds_cls)
+    ds = ds_cls.get_dataset()
 
     preprocessor = Preprocessor(output_size=config.input_size,
-                                default_aug=ds_config['default_aug'],
-                                rescale_min=ds_config['rescale_min'],
-                                rescale_max=ds_config['rescale_max'])
+                                default_aug=ds_config.get('default_aug'),
+                                rescale_min=ds_config.get('rescale_min'),
+                                rescale_max=ds_config.get('rescale_max'))
     ds = ds.map(preprocessor.resize_crop, num_parallel_calls=tf.data.experimental.AUTOTUNE)
 
     labeler = Labeler(config)
     map_fn = lambda img, category, box: (img, *labeler.anchor_box_pairing(box, category))
     ds = ds.map(map_fn, num_parallel_calls=tf.data.experimental.AUTOTUNE)
     ds = ds.batch(ds_config['batch_size'], drop_remainder=ds_config['default_aug'])
-    return ds
-
-
+    return ds, len_ds // ds_config['batch_size']
 
 
 if __name__ == '__main__':
